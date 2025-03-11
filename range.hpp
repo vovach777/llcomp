@@ -3,59 +3,55 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <cstdint>
 
 class RangeEncoder {
 public:
-    RangeEncoder(std::function<void(char)> put_byte) {
-        this->outstanding_count = 0;
-        this->outstanding_byte = -1;
-        this->low = 0;
-        this->range = 0xFF00;
-        this->put_byte = put_byte;
+    RangeEncoder(std::function<void(uint8_t)> put_byte): low(0), range(0xFF00), put_byte(put_byte), outstanding_count(0), outstanding_byte(-1) {
     }
 
     void renorm_encoder() {
-        while (this->range < 0x100) {
-            if (this->outstanding_byte < 0) {
-                this->outstanding_byte = this->low >> 8;
-            } else if (this->low <= 0xFF00) {
-                this->put_byte(this->outstanding_byte);
-                for (; this->outstanding_count; this->outstanding_count--)
-                    this->put_byte(0xFF);
-                this->outstanding_byte = this->low >> 8;
-            } else if (this->low >= 0x10000) {
-                this->put_byte(this->outstanding_byte + 1);
-                for (; this->outstanding_count; this->outstanding_count--)
-                    this->put_byte(0x00);
-                this->outstanding_byte = (this->low >> 8) & 0xFF;
+        while (range < 0x100) {
+            if (outstanding_byte < 0) {
+                outstanding_byte = low >> 8;
+            } else if (low <= 0xFF00) {
+                put_byte(outstanding_byte);
+                for (; outstanding_count; outstanding_count--)
+                    put_byte(0xFF);
+                outstanding_byte = low >> 8;
+            } else if (low >= 0x10000) {
+                put_byte(outstanding_byte + 1);
+                for (; outstanding_count; outstanding_count--)
+                    put_byte(0x00);
+                outstanding_byte = (low >> 8) & 0xFF;
             } else {
-                this->outstanding_count++;
+                outstanding_count++;
             }
-            this->low = (this->low & 0xFF) << 8;
-            this->range <<= 8;
+            low = (low & 0xFF) << 8;
+            range <<= 8;
         }
     }
 
     void put(bool bit, double probability) {
-        int range1 = std::max(1, std::min(this->range - 1, static_cast<int>(this->range * probability)));
-        assert(range1 < this->range);
+        int range1 = std::max(1, std::min(range - 1, static_cast<int>(range * probability)));
+        assert(range1 < range);
         assert(range1 > 0);
         if (!bit) {
-            this->range -= range1;
+            range -= range1;
         } else {
-            this->low += this->range - range1;
-            this->range = range1;
+            low += range - range1;
+            range = range1;
         }
-        assert(this->range >= 1);
-        this->renorm_encoder();
+        assert(range >= 1);
+        renorm_encoder();
     }
 
     void finish() {
-        this->range = 0xFF;
-        this->low += 0xFF;
-        this->renorm_encoder();
-        this->range = 0xFF;
-        this->renorm_encoder();
+        range = 0xFF;
+        low += 0xFF;
+        renorm_encoder();
+        range = 0xFF;
+        renorm_encoder();
     }
 
 private:
@@ -68,31 +64,29 @@ private:
 
 class RangeDecoder {
 public:
-    RangeDecoder(std::function<uint8_t()> get_byte) {
-        this->range = 0xFF00;
-        this->get_byte = get_byte;
-        this->low = this->get_byte() << 8;
-        this->low |= this->get_byte();
+    RangeDecoder(std::function<uint8_t()> get_byte) : get_byte(get_byte), range(0xFF00) {
+        low = this->get_byte() << 8;
+        low |= this->get_byte();
     }
 
     void refill() {
-        if (this->range < 0x100) {
-            this->range <<= 8;
-            this->low <<= 8;
-            this->low += this->get_byte();
+        if (range < 0x100) {
+            range <<= 8;
+            low <<= 8;
+            low += get_byte();
         }
     }
 
     bool get(double probability) {
-        int range1 = std::max(1, std::min(this->range - 1, static_cast<int>(this->range * probability)));
-        this->range -= range1;
-        if (this->low < this->range) {
-            this->refill();
+        int range1 = std::max(1, std::min(range - 1, static_cast<int>(range * probability)));
+        range -= range1;
+        if (low < range) {
+            refill();
             return 0;
         } else {
-            this->low -= this->range;
-            this->range = range1;
-            this->refill();
+            low -= range;
+            range = range1;
+            refill();
             return 1;
         }
     }
