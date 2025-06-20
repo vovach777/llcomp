@@ -2,11 +2,10 @@
 #include <string>
 #include <cassert>
 #include <fstream>
+#include <vector>
 #include "range.hpp"
-
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
-
 
 
 int main(int argc, char** argv) {

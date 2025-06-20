@@ -1,6 +1,7 @@
 #include <functional>
 #include <cassert>
 #include <algorithm>
+#include <vector>
 #include <cmath>
 #include <stdexcept>
 #include <cstdint>
