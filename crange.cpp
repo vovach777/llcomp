@@ -2,12 +2,14 @@
 #include <string>
 #include <cassert>
 #include <fstream>
+#include <vector>
 #include "range.hpp"
 #define STB_IMAGE_IMPLEMENTATION
    #define STBI_NO_GIF
    #define STBI_NO_PSD
    #define STBI_NO_PIC
 #include "stb_image.h"
+
 
 int main(int argc, char** argv) {
     if (argc < 2) {
