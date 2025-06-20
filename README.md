@@ -55,8 +55,8 @@ LLComp stands out as the **world's best lossless image compressor** due to its:
    ```
 
 3. After building, two executables will be generated:
-   - `crange(.exe)` – The **compressor** tool.
-   - `drange(.exe)` – The **decompressor** tool.
+   - `llcompc(.exe)` – The **compressor** tool.
+   - `llcompd(.exe)` – The **decompressor** tool.
 
 ## Usage
 
@@ -64,8 +64,8 @@ For examples of how to use LLComp, please refer to the [examples directory](exam
 
 ### Tools
 
-- **Compressor**: Use the `crange(.exe)` executable to compress images.
-- **Decompressor**: Use the `drange(.exe)` executable to decompress images.
+- **Compressor**: Use the `llcompc(.exe)` executable to compress images.
+- **Decompressor**: Use the `llcompd(.exe)` executable to decompress images.
 
 ## Technical Details
 
