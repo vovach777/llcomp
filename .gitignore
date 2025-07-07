@@ -1,0 +1,11 @@
+# Игнорировать все файлы и папки
+*
+!.gitignore
+# Разрешить только range.cpp
+!crange.cpp
+!drange.cpp
+!range.hpp
+!CMakeLists.txt
+!README.md
+!LICENSE
+!llcomp.js
