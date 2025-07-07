@@ -3,7 +3,7 @@
 #include <cassert>
 #include <fstream>
 #include <vector>
-#include "range.hpp"
+#include "llcomp.hpp"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
