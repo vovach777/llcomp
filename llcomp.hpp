@@ -6,6 +6,8 @@
 #include <stdexcept>
 #include <cstdint>
 
+inline std::string llcomp_ext = ".llcomp";
+
 class RangeEncoder {
 public:
     RangeEncoder(std::function<void(uint8_t)> put_byte): low(0), range(0xFF00), put_byte(put_byte), outstanding_count(0), outstanding_byte(-1) {

@@ -27,7 +27,7 @@ int main(int argc, char** argv) {
     stbi_image_free(stb_img);
 
     std::vector<uint8_t> compressed = compressImage(rgb, width, height, channels);
-    std::string outputFile = std::string(filename) + ".ppm";
+    std::string outputFile = std::string(filename) + llcomp_ext;
     std::ofstream outFile(outputFile, std::ios::binary);
     if (!outFile) {
         std::cerr << "Error opening output file: " << outputFile << std::endl;
