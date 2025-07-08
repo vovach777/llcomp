@@ -2,11 +2,16 @@
 #include <cassert>
 #include <algorithm>
 #include <vector>
+#include <array>
 #include <cmath>
 #include <stdexcept>
 #include <cstdint>
-
-inline std::string llcomp_ext = ".llcomp";
+#include <string>
+namespace llcomp {
+inline std::string ext = ".llcomp";
+inline uint8_t revision = 1;
+inline uint8_t magic_revision = 0x77 + revision;
+constexpr bool LargeModel = true;
 
 class RangeEncoder {
 public:
@@ -99,133 +104,120 @@ private:
     int low;
     std::function<int()> get_byte;
 };
-inline const std::vector<int> NEXT_STATE_MPS = {
-    2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
-    28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51,
-    52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75,
-    76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99,
-    100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118,
-    119, 120, 121, 122, 123, 124, 125, 124, 125, 126, 127
-};
 
-inline const std::vector<int> NEXT_STATE_LPS = {
-    1, 0, 0, 1, 2, 3, 4, 5, 4, 5, 8, 9, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 18, 19, 22,
-    23, 22, 23, 24, 25, 26, 27, 26, 27, 30, 31, 30, 31, 32, 33, 32, 33, 36, 37, 36, 37, 38, 39, 38,
-    39, 42, 43, 42, 43, 44, 45, 44, 45, 46, 47, 48, 49, 48, 49, 50, 51, 52, 53, 52, 53, 54, 55, 54,
-    55, 56, 57, 58, 59, 58, 59, 60, 61, 60, 61, 60, 61, 62, 63, 64, 65, 64, 65, 66, 67, 66, 67, 66,
-    67, 68, 69, 68, 69, 70, 71, 70, 71, 70, 71, 72, 73, 72, 73, 72, 73, 74, 75, 74, 75, 74, 75, 76,
-    77, 76, 77, 126, 127
-};
-
-inline const std::vector<double> MPS_PROBABILITY = {
-    0.5, 0.5273, 0.5504, 0.5735, 0.5945, 0.6155, 0.6366, 0.6555, 0.6723, 0.6891,
-    0.7059, 0.7206, 0.7353, 0.7479, 0.7605, 0.7731, 0.7857, 0.7962, 0.8067,
-    0.8172, 0.8256, 0.8361, 0.8445, 0.8529, 0.8592, 0.8676, 0.8739, 0.8803,
-    0.8866, 0.8929, 0.8992, 0.9034, 0.9097, 0.9139, 0.9181, 0.9223, 0.9265,
-    0.9307, 0.9349, 0.9391, 0.9412, 0.9454, 0.9475, 0.9517, 0.9538, 0.9559, 0.958,
-    0.9601, 0.9622, 0.9643, 0.9664, 0.9685, 0.9706, 0.9727, 0.9748, 0.9748,
-    0.9769, 0.979, 0.979, 0.9811, 0.9811, 0.9832, 0.9853, 1,
-};
-
-class Model3 {
-public:
-    Model3(size_t contexts_count = (11 * 11 * 11 * 5 * 5 + 1) / 2, size_t states_count = 8)
-        : contexts_count(contexts_count), states_count(states_count),
-          states(contexts_count * states_count, 0) {}
-    void reset() {
-        std::fill(states.begin(), states.end(), 0);
-    }
-    double P(size_t context, size_t bitpos) {
-        size_t index = std::min(contexts_count - 1, context) * states_count + std::min(states_count - 1, bitpos);
-        size_t state = states[index];
-        bool mps = state & 1;
-        double p_mps = MPS_PROBABILITY[state >> 1];
-        return mps ? p_mps : 1 - p_mps;
+namespace binarization {
+    #define HAS_BUILTIN_CLZ
+    inline int ilog2_32(uint32_t v, int error_value = 0) {
+        if (v == 0)
+            return error_value;
+    #ifdef HAS_BUILTIN_CLZ
+        return 31 - __builtin_clz(v);
+    #else
+        return static_cast<uint32_t>(std::log2(v));
+    #endif
     }
 
-    void update(size_t context, size_t bitpos, bool bit) {
-        assert(bit == 0 || bit == 1);
-        size_t index = std::min(contexts_count - 1, context) * states_count + std::min(states_count - 1, bitpos);
-        size_t state = states[index];
-        states[index] = (state & 1) == bit ? NEXT_STATE_MPS[state] : NEXT_STATE_LPS[state];
-    }
-    bool is_large_context() {
-        return contexts_count > 666;
-    }
-
-private:
-    size_t contexts_count;
-    size_t states_count;
-    std::vector<size_t> states;
-};
-
-#define HAS_BUILTIN_CLZ
-inline int ilog2_32(uint32_t v, int error_value = 0) {
-    if (v == 0)
-        return error_value;
-#ifdef HAS_BUILTIN_CLZ
-    return 31 - __builtin_clz(v);
-#else
-    return static_cast<uint32_t>(std::log2(v));
-#endif
-}
-
-
-inline void putSymbol(int v, bool isSigned, std::function<void(int, bool)> putRac) {
-    if (!putRac) {
-        return;
-    }
-
-    if (v) {
-        int a = std::abs(v);
-        int e = ilog2_32(a,0);
-        putRac(0, false);
-
-        int ctx = 1;
-        for (int i = 0; i < e; i++) {
-            putRac(std::min(ctx++, 4), true);
+    inline void putSymbol(int v, bool isSigned, std::function<void(int, bool)> putRac) {
+        if (!putRac) {
+            return;
         }
-        putRac(std::min(ctx++, 4), false);
 
+        if (v) {
+            int a = std::abs(v);
+            int e = ilog2_32(a,0);
+            putRac(0, false);
+
+            int ctx = 1;
+            for (int i = 0; i < e; i++) {
+                putRac(std::min(ctx++, 4), true);
+            }
+            putRac(std::min(ctx++, 4), false);
+
+            ctx = 5;
+            for (int i = e - 1; i >= 0; i--) {
+                putRac(std::min(ctx++, 6), (a >> i) & 1);
+            }
+
+            if (isSigned) {
+                putRac(7, v < 0);
+            }
+        } else {
+            putRac(0, true);
+        }
+    }
+
+    inline int getSymbol(bool isSigned, std::function<bool(int)> getRac) {
+        if (!getRac) return 0;
+
+        if (getRac(0)) return 0;
+
+        int e = 0;
+        int ctx = 1;
+        while (getRac(std::min(ctx++, 4))) {
+            e++;
+            if (e > 31) {
+                throw std::runtime_error("Invalid exponent");
+            }
+        }
+
+        int value = 1;
         ctx = 5;
         for (int i = e - 1; i >= 0; i--) {
-            putRac(std::min(ctx++, 6), (a >> i) & 1);
+            value += value + getRac(std::min(ctx++, 6));
         }
 
         if (isSigned) {
-            putRac(7, v < 0);
+            if (getRac(7))
+                value = -value;
         }
-    } else {
-        putRac(0, true);
+        return value;
     }
 }
 
-inline int getSymbol(bool isSigned, std::function<bool(int)> getRac) {
-    if (!getRac) return 0;
+namespace cabac {
 
-    if (getRac(0)) return 0;
+    constexpr inline const auto nextStateMps = std::array{
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
+        28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51,
+        52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75,
+        76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99,
+        100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118,
+        119, 120, 121, 122, 123, 124, 125, 124, 125, 126, 127
+    };
 
-    int e = 0;
-    int ctx = 1;
-    while (getRac(std::min(ctx++, 4))) {
-        e++;
-        if (e > 31) {
-            throw std::runtime_error("Invalid exponent");
-        }
+    constexpr inline const auto nextStateLps = std::array{
+        1, 0, 0, 1, 2, 3, 4, 5, 4, 5, 8, 9, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 18, 19, 22,
+        23, 22, 23, 24, 25, 26, 27, 26, 27, 30, 31, 30, 31, 32, 33, 32, 33, 36, 37, 36, 37, 38, 39, 38,
+        39, 42, 43, 42, 43, 44, 45, 44, 45, 46, 47, 48, 49, 48, 49, 50, 51, 52, 53, 52, 53, 54, 55, 54,
+        55, 56, 57, 58, 59, 58, 59, 60, 61, 60, 61, 60, 61, 62, 63, 64, 65, 64, 65, 66, 67, 66, 67, 66,
+        67, 68, 69, 68, 69, 70, 71, 70, 71, 70, 71, 72, 73, 72, 73, 72, 73, 74, 75, 74, 75, 74, 75, 76,
+        77, 76, 77, 126, 127
+    };
+
+    constexpr inline const auto mpsProbability = std::array{
+            0.5156,0.5405,0.5615,0.5825,0.6016,0.6207,0.6398,0.6570,
+            0.6723,0.6875,0.7028,0.7162,0.7295,0.7410,0.7525,0.7639,
+            0.7754,0.7849,0.7945,0.8040,0.8117,0.8212,0.8289,0.8365,
+            0.8422,0.8499,0.8556,0.8613,0.8671,0.8728,0.8785,0.8823,
+            0.8881,0.8919,0.8957,0.8995,0.9033,0.9072,0.9110,0.9148,
+            0.9167,0.9205,0.9224,0.9263,0.9282,0.9301,0.9320,0.9339,
+            0.9358,0.9377,0.9396,0.9415,0.9434,0.9454,0.9473,0.9473,
+            0.9492,0.9511,0.9511,0.9530,0.9530,0.9549,0.9568,0.9702
+        };
+
+        struct State {
+            uint8_t state{0}; //0.5 probability is default state
+            constexpr bool mps_bit() const { return state & 1; }
+            constexpr double P() const { return mps_bit() ? mpsProbability[state >> 1] : 1.0 - mpsProbability[state >> 1]; }
+            constexpr operator double() const {
+                return P();
+            }
+            constexpr void update(bool bit) {
+                state = (bit == mps_bit()) ? nextStateMps[state] : nextStateLps[state];
+            }
+        };
     }
 
-    int value = 1;
-    ctx = 5;
-    for (int i = e - 1; i >= 0; i--) {
-        value += value + getRac(std::min(ctx++, 6));
-    }
-
-    if (isSigned) {
-        if (getRac(7))
-            value = -value;
-    }
-    return value;
-}
 
 inline const std::vector<int> quant5_table = {
     0, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
@@ -305,7 +297,7 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& rgb, int w
         buffer[write_pos++] = (x >> 8) & 0xFF;
     };
 
-    writeU8(0x77);
+    writeU8(magic_revision);
     writeU8(channels);
     writeU16(width);
     writeU16(height);
@@ -315,7 +307,7 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& rgb, int w
     });
 
     std::vector<std::vector<int16_t>> lines(3, std::vector<int16_t>(stride));
-    Model3 model;
+    std::vector<cabac::State> states( ( ( LargeModel ? (11 * 11 * 11 * 5 * 5 + 1)  : (11 * 11 * 11 + 1 ) ) / 2  ) * 8 );
     int pos = 0;
     const int x1 = channels;
     const int x2 = channels * 2;
@@ -357,7 +349,7 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& rgb, int w
                 int hash = (quant11(l - tl) +
                     quant11(tl - t) * (11) +
                     quant11(t - tr) * (11 * 11));
-                if (model.is_large_context()) {
+                if (LargeModel) {
                     hash += quant5(L - l) * (5 * 11 * 11) + quant5(T - t) * (5 * 5 * 11 * 11);
                 }
                 const int predict = median(l, l + t - tl, t);
@@ -369,11 +361,13 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& rgb, int w
                 }
                 assert(hash >= 0);
 
-                putSymbol(diff, true, [&](int bitpos, bool bit) {
-                    const double prob = model.P(hash, bitpos);
-                    comp.put(bit, prob);
-                    model.update(hash, bitpos, bit);
+                binarization::putSymbol(diff, true, [&](int ctx, bool bit) {
+                   auto base = states.begin() +  hash * 8;
+                   auto& state = base[ctx];
+                   comp.put(bit, state.P());
+                   state.update(bit);
                 });
+
             }
         }
     }
@@ -394,7 +388,7 @@ inline RawImage decompressImage(const std::vector<uint8_t>& data) {
     size_t pos = 0;
     const uint8_t magic = data[pos++];
     //assert((magic & 0xFF) == 0x77 && "Invalid magic number");
-    if ((magic & 0xFF) != 0x77) {
+    if ((magic & 0xFF) != magic_revision) {
         throw std::runtime_error("Invalid magic number");
     }
     const uint8_t channels = data[pos++];
@@ -410,10 +404,10 @@ inline RawImage decompressImage(const std::vector<uint8_t>& data) {
         return data[pos++];
     });
 
-    Model3 model;
     const int x1 = channels;
     const int x2 = channels * 2;
     std::vector<std::vector<int16_t>> lines(3, std::vector<int16_t>(stride));
+    std::vector<cabac::State> states( ( ( LargeModel ? (11 * 11 * 11 * 5 * 5 + 1)  : (11 * 11 * 11 + 1 ) ) / 2  ) * 8 );
 
     for (size_t h = 0; h < height; ++h) {
         auto& line0 = lines[h % 3];
@@ -434,7 +428,7 @@ inline RawImage decompressImage(const std::vector<uint8_t>& data) {
                     quant11(tl - t) * 11 +
                     quant11(t - tr) * 11 * 11);
 
-                if (model.is_large_context()) {
+                if (LargeModel) {
                     hash += quant5(L - l) * (5 * 11 * 11) + quant5(T - t) * (5 * 5 * 11 * 11);
                 }
 
@@ -446,12 +440,14 @@ inline RawImage decompressImage(const std::vector<uint8_t>& data) {
                     neg_diff = true;
                 }
 
-                int diff = getSymbol(true, [&](int bitpos) {
-                    const double prob = model.P(hash, bitpos);
-                    bool bit = decomp.get(prob);
-                    model.update(hash, bitpos, bit);
+                int diff = binarization::getSymbol(true,[&](int ctx) {
+                    auto base = states.begin() +  hash * 8;
+                    auto& state = base[ctx];
+                    bool bit = decomp.get(state.P());
+                    state.update(bit);
                     return bit;
-                });
+                 });
+
 
                 if (neg_diff) {
                     diff = -diff;
@@ -474,4 +470,5 @@ inline RawImage decompressImage(const std::vector<uint8_t>& data) {
         }
     }
     return {std::move(pixels), width, height, channels};
+}
 }

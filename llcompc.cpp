@@ -26,8 +26,8 @@ int main(int argc, char** argv) {
     std::vector<uint8_t> rgb = std::vector<uint8_t>(stb_img, stb_img + width * height * channels);
     stbi_image_free(stb_img);
 
-    std::vector<uint8_t> compressed = compressImage(rgb, width, height, channels);
-    std::string outputFile = std::string(filename) + llcomp_ext;
+    std::vector<uint8_t> compressed = llcomp::compressImage(rgb, width, height, channels);
+    std::string outputFile = std::string(filename) + llcomp::ext;
     std::ofstream outFile(outputFile, std::ios::binary);
     if (!outFile) {
         std::cerr << "Error opening output file: " << outputFile << std::endl;

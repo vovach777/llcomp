@@ -23,7 +23,7 @@ int main(int argc, char** argv) {
     inFile.close();
 
     try {
-        auto [pixels, width, height, channels] = decompressImage(compressed);
+        auto [pixels, width, height, channels] = llcomp::decompressImage(compressed);
 
         std::string outputFile = std::string(filename) + ".png";
         if  (!stbi_write_png(outputFile.c_str(), width, height, channels, pixels.data(), width * channels)) {
