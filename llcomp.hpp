@@ -147,7 +147,6 @@ namespace binarization {
     #endif
     }
 
-inline std::array<size_t,16> log2_e_histogram = {0};
     /**
      * @brief Encodes a symbol using a binary arithmetic coding scheme.
      *
@@ -180,7 +179,6 @@ inline std::array<size_t,16> log2_e_histogram = {0};
         if (uv != 0) {
             auto e = ilog2_32<UnsafeBehavior>(uv);
             assert(e != 0);
-            log2_e_histogram[std::min<size_t>(e,log2_e_histogram.size()-1)]++;
 
             putRac(0, false);
 
@@ -199,7 +197,6 @@ inline std::array<size_t,16> log2_e_histogram = {0};
                 putRac(sign_ctx, v < 0);
             }
         } else {
-            log2_e_histogram[0]++;
             putRac(0, true);
         }
     }
@@ -445,13 +442,6 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& rgb, int w
     }
     comp.finish();
     buffer.resize(write_pos);
-    std::cout << "stat:";
-
-    for (auto freq : binarization::log2_e_histogram){
-        std::cout << " " << freq;
-    }
-    std::cout << std::endl;
-    //return std::vector<uint8_t>(buffer.begin(), buffer.begin() + write_pos);
     return buffer;
 }
 
