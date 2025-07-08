@@ -1,3 +1,4 @@
+#pragma once
 #include <functional>
 #include <cassert>
 #include <algorithm>
@@ -7,12 +8,28 @@
 #include <stdexcept>
 #include <cstdint>
 #include <string>
-namespace llcomp {
-inline std::string ext = ".llcomp";
-inline uint8_t revision = 1;
-inline uint8_t magic_revision = 0x77 + revision;
-constexpr bool LargeModel = true;
+#include <string_view>
+#include <cstdint>
+#include <functional>
+#include <utility>
+#include <type_traits>
 
+namespace llcomp {
+constexpr inline auto ext = ".llcomp";
+constexpr inline uint8_t revision = 1;
+constexpr inline uint8_t magic_revision = 0x77 + revision;
+constexpr inline bool LargeModel = true;
+constexpr inline int param_e_lim = 4;  //0,1,2,3,4
+constexpr inline int param_r_lim = 6;  //5,6
+constexpr inline int param_s_bit = 7;  //7
+constexpr inline int substates_nb = 8; //=
+constexpr size_t getStatesNb() {
+    if constexpr (LargeModel) {
+        return (11 * 11 * 11 * 5 * 5 + 1) / 2 * substates_nb;
+    } else {
+        return (11 * 11 * 11 + 1) / 2 * substates_nb;
+    }
+}
 class RangeEncoder {
 public:
     RangeEncoder(std::function<void(uint8_t)> put_byte): low(0), range(0xFF00), put_byte(put_byte), outstanding_count(0), outstanding_byte(-1) {
@@ -107,67 +124,122 @@ private:
 
 namespace binarization {
     #define HAS_BUILTIN_CLZ
-    inline int ilog2_32(uint32_t v, int error_value = 0) {
-        if (v == 0)
-            return error_value;
+    constexpr uint32_t UnsafeBehavior = 0xFFFFFFFFU; // Example value, adjust as needed
+    template <uint32_t error_value = 0, typename T>
+    inline uint32_t ilog2_32(T v) {
+        if constexpr (!std::is_integral_v<T>) {
+            throw std::invalid_argument("ilog2_32 requires an integral type");
+        }
+        if constexpr (error_value != UnsafeBehavior) {
+            //required value protection
+            if constexpr (std::is_signed_v<T>) {
+                if (v <= 0)
+                    return error_value;
+            } else {
+                if (v == 0)
+                    return error_value;
+            }
+        }
     #ifdef HAS_BUILTIN_CLZ
-        return 31 - __builtin_clz(v);
+        return 31 - __builtin_clz(static_cast<uint32_t>(v));
     #else
         return static_cast<uint32_t>(std::log2(v));
     #endif
     }
 
-    inline void putSymbol(int v, bool isSigned, std::function<void(int, bool)> putRac) {
+inline std::array<size_t,16> log2_e_histogram = {0};
+    /**
+     * @brief Encodes a symbol using a binary arithmetic coding scheme.
+     *
+     * @param isSigned Indicates whether the value `v` is signed. If true, the sign of `v` is encoded.
+     * @param e_limit The maximum value for the exponent context. Default is 4.
+     * @param r_limit The maximum value for the remainder context. Default is 7.
+     * @param sign_ctx The context for the sign bit. Default is 7.
+     * @param v The value to encode.
+     * @param putRac A callback function to handle the binary arithmetic coding.
+     *               It takes two parameters: the context (int) and the binary value (bool).
+     *               If the callback is null, the function does nothing.
+     */
+    template <bool isSigned, int e_limit=4, int r_limit=7, int sign_ctx=7, typename T>
+    inline void putSymbol(T v, std::function<void(int, bool)> putRac) {
+
+        if constexpr (!std::is_integral_v<T>) {
+            throw std::invalid_argument("putSymbol requires an integral type");
+        }
+
         if (!putRac) {
             return;
         }
+        uint32_t uv;
+        if constexpr (std::is_signed_v<T>) {
+            uv = static_cast<uint32_t>(std::abs(v));
+        } else {
+            uv = static_cast<uint32_t>(v);
+        }
 
-        if (v) {
-            int a = std::abs(v);
-            int e = ilog2_32(a,0);
+        if (uv != 0) {
+            auto e = ilog2_32<UnsafeBehavior>(uv);
+            assert(e != 0);
+            log2_e_histogram[std::min<size_t>(e,log2_e_histogram.size()-1)]++;
+
             putRac(0, false);
 
             int ctx = 1;
             for (int i = 0; i < e; i++) {
-                putRac(std::min(ctx++, 4), true);
+                putRac(std::min(ctx++, e_limit), true);
             }
-            putRac(std::min(ctx++, 4), false);
+            putRac(std::min(ctx, e_limit), false);
 
-            ctx = 5;
+            ctx = e_limit + 1;
             for (int i = e - 1; i >= 0; i--) {
-                putRac(std::min(ctx++, 6), (a >> i) & 1);
+                putRac(std::min(ctx++, r_limit), (uv >> i) & 1);
             }
 
-            if (isSigned) {
-                putRac(7, v < 0);
+            if constexpr (isSigned) {
+                putRac(sign_ctx, v < 0);
             }
         } else {
+            log2_e_histogram[0]++;
             putRac(0, true);
         }
     }
 
-    inline int getSymbol(bool isSigned, std::function<bool(int)> getRac) {
-        if (!getRac) return 0;
+    /**
+     * @brief Decodes a symbol using a binary arithmetic coding scheme.
+     * @param isSigned Indicates whether the decoded value should be treated as signed.
+     * @param e_limit The maximum value for the exponent context. Default is 4.
+     * @param r_limit The maximum value for the remainder context. Default is 7.
+     * @param sign_ctx The context for the sign bit. Default is 7.
+     * @param getRac A function that returns a boolean value based on the context.
+     *               It takes an integer context as input and returns a boolean value.
+     * @return The decoded symbol as an integer.
+     * @throws std::runtime_error If the decoded exponent exceeds 31, indicating invalid data.
+     */
+    template <bool isSigned, int e_limit=4, int r_limit=7, int sign_ctx=7>
+    inline auto getSymbol(std::function<bool(int)> getRac) {
 
-        if (getRac(0)) return 0;
+        std::conditional_t<isSigned, int32_t, uint32_t> value{0};
+        if (!getRac) return value; // If the callback is null, return zero.
+
+        if (getRac(0)) return value;
 
         int e = 0;
         int ctx = 1;
-        while (getRac(std::min(ctx++, 4))) {
+        value = 1;
+        while (getRac(std::min(ctx++, e_limit))) {
             e++;
             if (e > 31) {
                 throw std::runtime_error("Invalid exponent");
             }
         }
 
-        int value = 1;
-        ctx = 5;
+        ctx = e_limit + 1;
         for (int i = e - 1; i >= 0; i--) {
-            value += value + getRac(std::min(ctx++, 6));
+            value += value + getRac(std::min(ctx++, r_limit));
         }
 
-        if (isSigned) {
-            if (getRac(7))
+        if constexpr (isSigned) {
+            if (getRac(sign_ctx))
                 value = -value;
         }
         return value;
@@ -307,7 +379,7 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& rgb, int w
     });
 
     std::vector<std::vector<int16_t>> lines(3, std::vector<int16_t>(stride));
-    std::vector<cabac::State> states( ( ( LargeModel ? (11 * 11 * 11 * 5 * 5 + 1)  : (11 * 11 * 11 + 1 ) ) / 2  ) * 8 );
+    std::vector<cabac::State> states( getStatesNb() );
     int pos = 0;
     const int x1 = channels;
     const int x2 = channels * 2;
@@ -361,8 +433,8 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& rgb, int w
                 }
                 assert(hash >= 0);
 
-                binarization::putSymbol(diff, true, [&](int ctx, bool bit) {
-                   auto base = states.begin() +  hash * 8;
+                binarization::putSymbol<true,param_e_lim,param_r_lim,param_s_bit>(diff,[&](int ctx, bool bit) {
+                   auto base = states.begin() +  hash * substates_nb;
                    auto& state = base[ctx];
                    comp.put(bit, state.P());
                    state.update(bit);
@@ -373,6 +445,12 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& rgb, int w
     }
     comp.finish();
     buffer.resize(write_pos);
+    std::cout << "stat:";
+
+    for (auto freq : binarization::log2_e_histogram){
+        std::cout << " " << freq;
+    }
+    std::cout << std::endl;
     //return std::vector<uint8_t>(buffer.begin(), buffer.begin() + write_pos);
     return buffer;
 }
@@ -407,7 +485,7 @@ inline RawImage decompressImage(const std::vector<uint8_t>& data) {
     const int x1 = channels;
     const int x2 = channels * 2;
     std::vector<std::vector<int16_t>> lines(3, std::vector<int16_t>(stride));
-    std::vector<cabac::State> states( ( ( LargeModel ? (11 * 11 * 11 * 5 * 5 + 1)  : (11 * 11 * 11 + 1 ) ) / 2  ) * 8 );
+    std::vector<cabac::State> states( getStatesNb() );
 
     for (size_t h = 0; h < height; ++h) {
         auto& line0 = lines[h % 3];
@@ -440,8 +518,8 @@ inline RawImage decompressImage(const std::vector<uint8_t>& data) {
                     neg_diff = true;
                 }
 
-                int diff = binarization::getSymbol(true,[&](int ctx) {
-                    auto base = states.begin() +  hash * 8;
+                int diff = binarization::getSymbol<true,param_e_lim,param_r_lim, param_s_bit>([&](int ctx) {
+                    auto base = states.begin() +  hash * substates_nb;
                     auto& state = base[ctx];
                     bool bit = decomp.get(state.P());
                     state.update(bit);
