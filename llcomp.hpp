@@ -57,8 +57,9 @@ public:
         }
     }
 
-    void put(bool bit, double probability) {
-        int range1 = std::max(1, std::min(range - 1, static_cast<int>(range * probability)));
+    void put(bool bit, uint8_t probability) {
+        assert(range >= 0x100);
+        int range1 = range * probability >> 8;
         assert(range1 < range);
         assert(range1 > 0);
         if (!bit) {
@@ -102,8 +103,11 @@ public:
         }
     }
 
-    bool get(double probability) {
-        int range1 = std::max(1, std::min(range - 1, static_cast<int>(range * probability)));
+    bool get(uint8_t probability) {
+        assert(probability > 0);
+        assert(range >= 0x100);
+        int range1 = range * probability >> 8;
+        assert(range1 > 0);
         range -= range1;
         if (low < range) {
             refill();
@@ -251,7 +255,7 @@ namespace cabac {
         52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75,
         76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99,
         100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118,
-        119, 120, 121, 122, 123, 124, 125, 124, 125, 126, 127
+        119, 120, 121, 122, 123, 124, 125, 126, 127, 126, 127
     };
 
     constexpr inline const auto nextStateLps = std::array{
@@ -259,27 +263,36 @@ namespace cabac {
         23, 22, 23, 24, 25, 26, 27, 26, 27, 30, 31, 30, 31, 32, 33, 32, 33, 36, 37, 36, 37, 38, 39, 38,
         39, 42, 43, 42, 43, 44, 45, 44, 45, 46, 47, 48, 49, 48, 49, 50, 51, 52, 53, 52, 53, 54, 55, 54,
         55, 56, 57, 58, 59, 58, 59, 60, 61, 60, 61, 60, 61, 62, 63, 64, 65, 64, 65, 66, 67, 66, 67, 66,
-        67, 68, 69, 68, 69, 70, 71, 70, 71, 70, 71, 72, 73, 72, 73, 72, 73, 74, 75, 74, 75, 74, 75, 76,
-        77, 76, 77, 126, 127
+        67, 68, 69, 68, 69, 70, 71, 70, 71, 70, 71, 72, 73, 72, 73, 72, 73, 74, 75, 76, 77, 76, 77, 78,
+        79, 78, 79, 78, 79
     };
 
-    constexpr inline const auto mpsProbability = std::array{
-            0.5156,0.5405,0.5615,0.5825,0.6016,0.6207,0.6398,0.6570,
-            0.6723,0.6875,0.7028,0.7162,0.7295,0.7410,0.7525,0.7639,
-            0.7754,0.7849,0.7945,0.8040,0.8117,0.8212,0.8289,0.8365,
-            0.8422,0.8499,0.8556,0.8613,0.8671,0.8728,0.8785,0.8823,
-            0.8881,0.8919,0.8957,0.8995,0.9033,0.9072,0.9110,0.9148,
-            0.9167,0.9205,0.9224,0.9263,0.9282,0.9301,0.9320,0.9339,
-            0.9358,0.9377,0.9396,0.9415,0.9434,0.9454,0.9473,0.9473,
-            0.9492,0.9511,0.9511,0.9530,0.9530,0.9549,0.9568,0.9702
+    // constexpr inline const auto mpsProbability = std::array{
+    //         0.5156,0.5405,0.5615,0.5825,0.6016,0.6207,0.6398,0.6570,
+    //         0.6723,0.6875,0.7028,0.7162,0.7295,0.7410,0.7525,0.7639,
+    //         0.7754,0.7849,0.7945,0.8040,0.8117,0.8212,0.8289,0.8365,
+    //         0.8422,0.8499,0.8556,0.8613,0.8671,0.8728,0.8785,0.8823,
+    //         0.8881,0.8919,0.8957,0.8995,0.9033,0.9072,0.9110,0.9148,
+    //         0.9167,0.9205,0.9224,0.9263,0.9282,0.9301,0.9320,0.9339,
+    //         0.9358,0.9377,0.9396,0.9415,0.9434,0.9454,0.9473,0.9473,
+    //         0.9492,0.9511,0.9511,0.9530,0.9530,0.9549,0.9568,0.9702
+    //     };
+    constexpr inline const std::array<uint8_t,128> stateProbability =
+     {  128,130,121,135,116,140,110,146,105,151,100,156,95,161,91,165,
+        87,169,83,173,79,177,75,181,72,184,69,187,66,190,63,193,
+        60,196,57,199,55,201,52,204,50,206,48,208,46,210,44,212,
+        42,214,40,216,39,217,37,219,36,220,34,222,33,223,32,224,
+        30,226,29,227,28,228,27,229,26,230,25,231,24,232,23,233,
+        23,233,22,234,21,235,20,236,20,236,19,237,19,237,18,238,
+        18,238,17,239,17,239,16,240,16,240,15,241,15,241,15,241,
+        14,242,14,242,14,242,13,243,13,243,13,243,12,244,9,247,
         };
-
         struct State {
             uint8_t state{0}; //0.5 probability is default state
             constexpr bool mps_bit() const { return state & 1; }
-            constexpr double P() const { return mps_bit() ? mpsProbability[state >> 1] : 1.0 - mpsProbability[state >> 1]; }
-            constexpr operator double() const {
-                return P();
+            constexpr uint8_t P_8bit() const {
+                assert(state <= 127);
+                return std::max(uint8_t{32},stateProbability[state]);
             }
             constexpr void update(bool bit) {
                 state = (bit == mps_bit()) ? nextStateMps[state] : nextStateLps[state];
@@ -433,7 +446,7 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& rgb, int w
                 binarization::putSymbol<true,param_e_lim,param_r_lim,param_s_bit>(diff,[&](int ctx, bool bit) {
                    auto base = states.begin() +  hash * substates_nb;
                    auto& state = base[ctx];
-                   comp.put(bit, state.P());
+                   comp.put(bit, state.P_8bit());
                    state.update(bit);
                 });
 
@@ -511,7 +524,7 @@ inline RawImage decompressImage(const std::vector<uint8_t>& data) {
                 int diff = binarization::getSymbol<true,param_e_lim,param_r_lim, param_s_bit>([&](int ctx) {
                     auto base = states.begin() +  hash * substates_nb;
                     auto& state = base[ctx];
-                    bool bit = decomp.get(state.P());
+                    bool bit = decomp.get(state.P_8bit());
                     state.update(bit);
                     return bit;
                  });
