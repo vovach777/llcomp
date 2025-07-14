@@ -12,6 +12,10 @@
 
 
 int main(int argc, char** argv) {
+    // if (llcomp::binarization::ilog2_32<0>(uint32_t{1}) == 0) {
+    //     std::cerr << "Unsafe behavior is enabled" << std::endl;
+    //     return;
+    // }
     if (argc < 2) {
         std::cerr << "Usage: " << argv[0] << " <image_path>" << std::endl;
         return 1;
