@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 add_executable(llcompc llcompc.cpp llcomp.hpp)
 add_executable(llcompd llcompd.cpp llcomp.hpp)
 # Or use the header-only version
-find_package(fmt CONFIG REQUIRED)
+#find_package(fmt CONFIG REQUIRED)
 find_package(Stb REQUIRED)
 # target_link_libraries(llcompc PRIVATE fmt::fmt-header-only)
 # target_link_libraries(llcompd PRIVATE fmt::fmt-header-only)
