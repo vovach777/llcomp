@@ -60,11 +60,6 @@ public:
     void put(bool bit, uint8_t probability) {
         assert(range >= 0x100);
         int range1 = range * probability >> 8;
-        if (range1 == 0) {
-            std::cerr << "range1 is zero" << std::endl;
-            range1 = 1;
-
-        }
         assert(range1 < range);
         assert(range1 > 0);
         if (!bit) {
