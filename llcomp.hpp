@@ -380,7 +380,7 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& rgb, int w
     int pos = 0;
     const int x1 = channels;
     const int x2 = channels * 2;
-    int Y_period = 0;
+
     for (int h = 0; h < height; ++h) {
         auto& line0 = lines[h % 3];
         auto& line1 = lines[(h + 3 - 1) % 3];
