@@ -27,34 +27,6 @@ namespace BitStream {
     }
 #endif
 
-#define HAS_BUILTIN_CLZ
-constexpr uint32_t UnsafeBehavior = 0xFFFFFFFFU; // Example value, adjust as needed
-template <uint32_t error_value = 0, typename T>
-inline uint32_t ilog2_32(T v) {
-    if constexpr (!std::is_integral_v<T>) {
-        throw std::invalid_argument("ilog2_32 requires an integral type");
-    }
-    if constexpr (error_value != UnsafeBehavior) {
-        //required value protection
-        if constexpr (std::is_signed_v<T>) {
-            if (v <= 0)
-                return error_value;
-        } else {
-            if (v == 0)
-                return error_value;
-        }
-    }
-#ifdef HAS_BUILTIN_CLZ
-    return 31 - __builtin_clz(static_cast<uint32_t>(v));
-#else
-    return static_cast<uint32_t>(std::log2(v));
-#endif
-}
-
-inline uint32_t bitsize(uint32_t v) {
-    return v == 0 ? 0 : 32 - __builtin_clz(v);
-}
-
 struct Writer {
     alignas(8) uint64_t buf{0};
     uint32_t left{64};
