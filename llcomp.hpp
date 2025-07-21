@@ -13,16 +13,17 @@
 #include <functional>
 #include <utility>
 #include <type_traits>
+#include "bitstream.hpp"
+#include "rlgr.hpp"
 
 namespace llcomp {
-constexpr inline auto ext = ".llcomp";
-constexpr inline uint8_t revision = 2;
-constexpr inline uint8_t magic_revision = 0x77 + revision;
+constexpr inline auto ext = ".llrice";
+constexpr inline uint8_t revision = 3;
+constexpr inline uint8_t magic_revision = 0x33 + revision;
 constexpr inline bool LargeModel = true;
-constexpr inline int param_e_lim = 4;  //0,1,2,3,4
-constexpr inline int param_r_lim = 6;  //5,6
-constexpr inline int param_s_bit = 7;  //7
-constexpr inline int substates_nb = 8; //=
+constexpr inline size_t substates_nb = 1;
+constexpr inline int default_k = 1;
+constexpr inline int max_k = 15;
 constexpr size_t getStatesNb() {
     if constexpr (LargeModel) {
         return (11 * 11 * 11 * 5 * 5 + 1) / 2 * substates_nb;
@@ -30,274 +31,6 @@ constexpr size_t getStatesNb() {
         return (11 * 11 * 11 + 1) / 2 * substates_nb;
     }
 }
-class RangeEncoder {
-public:
-    RangeEncoder(std::function<void(uint8_t)> put_byte): low(0), range(0xFF00), put_byte(put_byte), outstanding_count(0), outstanding_byte(-1) {
-    }
-
-    void renorm_encoder() {
-        while (range < 0x100) {
-            if (outstanding_byte < 0) {
-                outstanding_byte = low >> 8;
-            } else if (low <= 0xFF00) {
-                put_byte(outstanding_byte);
-                for (; outstanding_count; outstanding_count--)
-                    put_byte(0xFF);
-                outstanding_byte = low >> 8;
-            } else if (low >= 0x10000) {
-                put_byte(outstanding_byte + 1);
-                for (; outstanding_count; outstanding_count--)
-                    put_byte(0x00);
-                outstanding_byte = (low >> 8) & 0xFF;
-            } else {
-                outstanding_count++;
-            }
-            low = (low & 0xFF) << 8;
-            range <<= 8;
-        }
-    }
-
-    void put(bool bit, uint8_t probability) {
-        assert(range >= 0x100);
-        int range1 = range * probability >> 8;
-        if (range1 == 0) {
-            std::cerr << "range1 is zero" << std::endl;
-            range1 = 1;
-
-        }
-        assert(range1 < range);
-        assert(range1 > 0);
-        if (!bit) {
-            range -= range1;
-        } else {
-            low += range - range1;
-            range = range1;
-        }
-        assert(range >= 1);
-        renorm_encoder();
-    }
-
-    void finish() {
-        range = 0xFF;
-        low += 0xFF;
-        renorm_encoder();
-        range = 0xFF;
-        renorm_encoder();
-    }
-
-private:
-    int outstanding_count;
-    int outstanding_byte;
-    int low;
-    int range;
-    std::function<void(char)> put_byte;
-};
-
-class RangeDecoder {
-public:
-    RangeDecoder(std::function<uint8_t()> get_byte) : get_byte(get_byte), range(0xFF00) {
-        low = this->get_byte() << 8;
-        low |= this->get_byte();
-    }
-
-    void refill() {
-        if (range < 0x100) {
-            range <<= 8;
-            low <<= 8;
-            low += get_byte();
-        }
-    }
-
-    bool get(uint8_t probability) {
-        assert(probability > 0);
-        assert(range >= 0x100);
-        int range1 = range * probability >> 8;
-        assert(range1 > 0);
-        range -= range1;
-        if (low < range) {
-            refill();
-            return 0;
-        } else {
-            low -= range;
-            range = range1;
-            refill();
-            return 1;
-        }
-    }
-
-private:
-    int range;
-    int low;
-    std::function<int()> get_byte;
-};
-
-namespace binarization {
-    #define HAS_BUILTIN_CLZ
-    constexpr uint32_t UnsafeBehavior = 0xFFFFFFFFU; // Example value, adjust as needed
-    template <uint32_t error_value = 0, typename T>
-    inline uint32_t ilog2_32(T v) {
-        if constexpr (!std::is_integral_v<T>) {
-            throw std::invalid_argument("ilog2_32 requires an integral type");
-        }
-        if constexpr (error_value != UnsafeBehavior) {
-            //required value protection
-            if constexpr (std::is_signed_v<T>) {
-                if (v <= 0)
-                    return error_value;
-            } else {
-                if (v == 0)
-                    return error_value;
-            }
-        }
-    #ifdef HAS_BUILTIN_CLZ
-        return 31 - __builtin_clz(static_cast<uint32_t>(v));
-    #else
-        return static_cast<uint32_t>(std::log2(v));
-    #endif
-    }
-
-    /**
-     * @brief Encodes a symbol using a binary arithmetic coding scheme.
-     *
-     * @param isSigned Indicates whether the value `v` is signed. If true, the sign of `v` is encoded.
-     * @param e_limit The maximum value for the exponent context. Default is 4.
-     * @param r_limit The maximum value for the remainder context. Default is 7.
-     * @param sign_ctx The context for the sign bit. Default is 7.
-     * @param v The value to encode.
-     * @param putRac A callback function to handle the binary arithmetic coding.
-     *               It takes two parameters: the context (int) and the binary value (bool).
-     *               If the callback is null, the function does nothing.
-     */
-    template <bool isSigned, int e_limit=4, int r_limit=7, int sign_ctx=7, typename T>
-    inline void putSymbol(T v, std::function<void(int, bool)> putRac) {
-
-        if constexpr (!std::is_integral_v<T>) {
-            throw std::invalid_argument("putSymbol requires an integral type");
-        }
-
-        if (!putRac) {
-            return;
-        }
-        uint32_t uv;
-        if constexpr (std::is_signed_v<T>) {
-            uv = static_cast<uint32_t>(std::abs(v));
-        } else {
-            uv = static_cast<uint32_t>(v);
-        }
-
-        if (uv != 0) {
-            auto e = ilog2_32<UnsafeBehavior>(uv);
-            // assert(e != 0);
-
-            putRac(0, false);
-
-            int ctx = 1;
-            for (int i = 0; i < e; i++) {
-                putRac(std::min(ctx++, e_limit), true);
-            }
-            putRac(std::min(ctx, e_limit), false);
-
-            ctx = e_limit + 1;
-            for (int i = e - 1; i >= 0; i--) {
-                putRac(std::min(ctx++, r_limit), (uv >> i) & 1);
-            }
-
-            if constexpr (isSigned) {
-                putRac(sign_ctx, v < 0);
-            }
-        } else {
-            putRac(0, true);
-        }
-    }
-
-    /**
-     * @brief Decodes a symbol using a binary arithmetic coding scheme.
-     * @param isSigned Indicates whether the decoded value should be treated as signed.
-     * @param e_limit The maximum value for the exponent context. Default is 4.
-     * @param r_limit The maximum value for the remainder context. Default is 7.
-     * @param sign_ctx The context for the sign bit. Default is 7.
-     * @param getRac A function that returns a boolean value based on the context.
-     *               It takes an integer context as input and returns a boolean value.
-     * @return The decoded symbol as an integer.
-     * @throws std::runtime_error If the decoded exponent exceeds 31, indicating invalid data.
-     */
-    template <bool isSigned, int e_limit=4, int r_limit=7, int sign_ctx=7>
-    inline auto getSymbol(std::function<bool(int)> getRac) {
-
-        std::conditional_t<isSigned, int32_t, uint32_t> value{0};
-        if (!getRac) return value; // If the callback is null, return zero.
-
-        if (getRac(0)) return value;
-
-        int e = 0;
-        int ctx = 1;
-        value = 1;
-        while (getRac(std::min(ctx++, e_limit))) {
-            e++;
-            if (e > 31) {
-                throw std::runtime_error("Invalid exponent");
-            }
-        }
-
-        ctx = e_limit + 1;
-        for (int i = e - 1; i >= 0; i--) {
-            value += value + getRac(std::min(ctx++, r_limit));
-        }
-
-        if constexpr (isSigned) {
-            if (getRac(sign_ctx))
-                value = -value;
-        }
-        return value;
-    }
-}
-
-namespace cabac {
-
-    constexpr inline const auto nextStateMps = std::array{
-        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
-        28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51,
-        52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75,
-        76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99,
-        100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118,
-        119, 120, 121, 122, 123, 124, 125, 124, 125, 126, 127
-    };
-
-    constexpr inline const auto nextStateLps = std::array{
-        1, 0, 0, 1, 2, 3, 4, 5, 4, 5, 8, 9, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 18, 19, 22,
-        23, 22, 23, 24, 25, 26, 27, 26, 27, 30, 31, 30, 31, 32, 33, 32, 33, 36, 37, 36, 37, 38, 39, 38,
-        39, 42, 43, 42, 43, 44, 45, 44, 45, 46, 47, 48, 49, 48, 49, 50, 51, 52, 53, 52, 53, 54, 55, 54,
-        55, 56, 57, 58, 59, 58, 59, 60, 61, 60, 61, 60, 61, 62, 63, 64, 65, 64, 65, 66, 67, 66, 67, 66,
-        67, 68, 69, 68, 69, 70, 71, 70, 71, 70, 71, 72, 73, 72, 73, 72, 73, 74, 75, 76, 77, 76, 77, 76,
-        77, 76, 77, 76, 77
-    };
-
-constexpr inline const std::array<uint8_t,128> stateProbability = {
-
-123,131,117,137,111,143,106,148,101,153,96,158,91,163,87,167,
-83,171,79,175,75,179,72,182,68,186,66,188,63,191,60,194,
-57,197,54,200,52,202,49,205,48,206,45,209,43,211,41,213,
-40,214,38,216,36,218,35,219,33,221,32,222,30,224,30,224,
-28,226,27,227,26,228,25,229,24,230,23,231,22,232,21,233,
-21,233,20,234,19,235,18,236,18,236,17,237,17,237,16,238,
-16,238,15,239,15,239,14,240,14,240,13,241,13,241,13,241,
-12,242,12,242,12,242,11,243,11,243,11,243,11,243,7,247
-
-};
-
-        struct State {
-            uint8_t state{0}; //0.5 probability is default state
-            constexpr bool mps_bit() const { return state & 1; }
-            constexpr auto P() const {
-                assert(state <= 127);
-                return stateProbability[state];
-            }
-            constexpr void update(bool bit) {
-                state = (bit == mps_bit()) ? nextStateMps[state] : nextStateLps[state];
-            }
-        };
-    }
-
 
 inline const std::vector<int> quant5_table = {
     0, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
@@ -364,17 +97,17 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& rgb, int w
     int size = width * height * channels;
     int stride = width * channels;
     assert(size == rgb.size());
-    std::vector<uint8_t> buffer(size);
-    int write_pos = 0;
-    int read_pos = 0;
+    std::vector<uint8_t> buffer;
+    buffer.reserve(size*3/4);
+    size_t read_pos = 0;
 
     auto writeU8 = [&](uint8_t x) {
-        buffer[write_pos++] = x;
+        buffer.push_back(x);
     };
 
     auto writeU16 = [&](uint16_t x) {
-        buffer[write_pos++] = x & 0xFF;
-        buffer[write_pos++] = (x >> 8) & 0xFF;
+        buffer.push_back(x & 0xFF);
+        buffer.push_back((x >> 8) & 0xFF);
     };
 
     writeU8(magic_revision);
@@ -382,12 +115,17 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& rgb, int w
     writeU16(width);
     writeU16(height);
 
-    RangeEncoder comp([&](char x) {
-        writeU8(x);
-    });
+    BitStream::Writer bit_stream{};
+    auto flusher = [&](const uint8_t* data, size_t size) {
+        buffer.resize(buffer.size() + size);
+        if ( size == 8 )
+            std::memcpy(buffer.data() + buffer.size() - 8, data, 8);
+        else
+            std::memcpy(buffer.data() + buffer.size() - size, data, size);
+    };
 
     std::vector<std::vector<int16_t>> lines(3, std::vector<int16_t>(stride));
-    std::vector<cabac::State> states( getStatesNb() );
+    std::vector<RLGR::Encoder> states( getStatesNb());
     int pos = 0;
     const int x1 = channels;
     const int x2 = channels * 2;
@@ -440,19 +178,21 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& rgb, int w
                     diff = -diff;
                 }
                 assert(hash >= 0);
-
-                binarization::putSymbol<true,param_e_lim,param_r_lim,param_s_bit>(diff,[&](int ctx, bool bit) {
-                   auto base = states.begin() +  hash * substates_nb;
-                   auto& state = base[ctx];
-                   comp.put(bit, state.P());
-                   state.update(bit);
-                });
-
+                auto udiff = Rice::to_unsigned(diff);
+                // uint8_t& k = states[hash];
+                // Rice::write( udiff, k, [&](uint32_t n, uint32_t value){
+                //     bit_stream.put_bits(n, value, flusher);
+                // });
+                // auto new_k = BitStream::bitsize(udiff);
+                // k = std::min<uint8_t>(max_k, (new_k*2+k) / 3); // Адаптивное обновление k
+                auto & state = states[hash];
+                state.writeUnsigned(udiff,[&](uint32_t n, uint32_t value){
+                         bit_stream.put_bits(n, value, flusher);
+                     });
             }
         }
     }
-    comp.finish();
-    buffer.resize(write_pos);
+    bit_stream.flush(flusher);
     return buffer;
 }
 
@@ -477,16 +217,23 @@ inline RawImage decompressImage(const std::vector<uint8_t>& data) {
     std::vector<uint8_t> pixels(width * height * channels);
     size_t rgb_pos = 0;
 
-    RangeDecoder decomp([&]() -> uint8_t {
-        if (pos >= data.size())
-            return 0;
-        return data[pos++];
-    });
 
     const int x1 = channels;
     const int x2 = channels * 2;
     std::vector<std::vector<int16_t>> lines(3, std::vector<int16_t>(stride));
-    std::vector<cabac::State> states( getStatesNb() );
+    std::vector<RLGR::Decoder> states( getStatesNb() );
+    BitStream::Reader bit_stream{};
+    auto refiller = [&]() {
+        if (pos + 8 <= data.size()) {
+            pos += 8;
+            return std::make_pair(data.data() + pos - 8, size_t{8});
+        } else {
+            size_t rem = data.size() - pos;
+            pos += rem;
+            return std::make_pair(data.data() + data.size() - rem ,  rem);
+        }
+    };
+    bit_stream.init(refiller);
 
     for (size_t h = 0; h < height; ++h) {
         auto& line0 = lines[h % 3];
@@ -518,15 +265,11 @@ inline RawImage decompressImage(const std::vector<uint8_t>& data) {
                     hash = -hash;
                     neg_diff = true;
                 }
-
-                int diff = binarization::getSymbol<true,param_e_lim,param_r_lim, param_s_bit>([&](int ctx) {
-                    auto base = states.begin() +  hash * substates_nb;
-                    auto& state = base[ctx];
-                    bool bit = decomp.get(state.P());
-                    state.update(bit);
-                    return bit;
-                 });
-
+                auto& state = states[hash];
+                auto udiff = state.readUnsigned( [&](){ return bit_stream.peek32();}, [&](uint32_t n) { bit_stream.skip(n, refiller); });
+                // auto new_k = BitStream::bitsize(udiff);
+                // k = std::min<uint8_t>(max_k, (k * 2 + new_k + 2) / 3);
+                auto diff = Rice::to_signed(udiff);
 
                 if (neg_diff) {
                     diff = -diff;
