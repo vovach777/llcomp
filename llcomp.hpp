@@ -48,90 +48,89 @@ namespace llcomp
         return b;
     }
 
-    auto split_8bit_pixels_into_int16_channels(const uint8_t *_data, int channels, int width, int height, size_t stride = 0)
-    {
-        if (stride == 0)
-        {
-            stride = width * channels;
-        }
-        auto res = std::vector(channels, std::vector(width * height, int16_t{}));
-        size_t pos{0};
-
-        for (int h = 0; h < height; ++h)
-        {
-            auto data = _data;
-            _data += stride;
-            for (int w = 0; w < width; ++w)
-            {
-                if (channels >= 3)
-                {
-                    int r = data[0];
-                    int g = data[1];
-                    int b = data[2];
-                    b -= g;
-                    r -= g;
-                    g += (b + r) / 4;
-                    res[0][pos] = static_cast<int16_t>(r);
-                    res[1][pos] = static_cast<int16_t>(g);
-                    res[2][pos] = static_cast<int16_t>(b);
-
-                    for (int i = 3; i < channels; i++)
-                    {
-                        res[i][pos] = static_cast<int16_t>(data[i]);
-                    }
-                }
-                else
-                {
-                    for (int i = 0; i < channels; i++)
-                    {
-                        res[i][pos] = static_cast<int16_t>(data[i]);
-                    }
-                }
-                data += channels;
-                pos += 1;
-            }
-        }
-        return res;
+    template <typename T>
+auto split_rgb_into_planar(const T* _data, int channels, int width, int height, size_t stride=0)
+{
+    if (stride == 0) {
+        stride = width*channels;
     }
+    auto res = std::vector(channels, std::vector(width*height,int16_t{}));
+    size_t pos{0};
 
-    std::vector<uint8_t> join_int16_channels_to_8bit_pixels(std::vector<std::vector<int16_t>> &channels, uint32_t width, uint32_t height, size_t stride = 0)
-    {
+    for (int h = 0; h < height; ++h) {
+        auto data  = _data;
+        _data += stride;
+        for (int w = 0; w < width; ++w) {
+            if (channels >= 3) {
+                int r = data[0];
+                int g = data[1];
+                int b = data[2];
+                b -= g;
+                r -= g;
+                g += (b + r) / 4;
+                res[0][pos] = static_cast<int16_t>( r );
+                res[1][pos] = static_cast<int16_t>( g );
+                res[2][pos] = static_cast<int16_t>( b );
 
-        if (stride == 0)
-        {
-            stride = width * channels.size();
+                for (int i = 3; i < channels; i++) {
+                    res[i][pos] = static_cast<int16_t>(data[i]);
+                }
+            } else {
+                for (int i = 0; i < channels; i++) {
+                    res[i][pos] = static_cast<int16_t>(data[i]);
+                }
+            }
+            data += channels;
+            pos += 1;
         }
-        auto res = std::vector(stride * height, uint8_t{});
-        auto out_ = res.data();
-        size_t pos = 0;
-        for (uint32_t h = 0; h < height; ++h)
+    }
+    return res;
+}
+
+template <typename T>
+std::vector<T> join_planar_into_rgb(std::vector<std::vector<int16_t>> & channels, uint32_t width, uint32_t height, size_t stride=0) {
+
+    if (stride == 0) {
+        stride = width*channels.size();
+    }
+    auto res = std::vector(stride*height,T{});
+    auto out_ = res.data();
+    size_t pos = 0;
+    for (uint32_t h=0; h < height; ++h)
+    {
+        auto out = out_; out_ += stride;
+        for (uint32_t w=0; w < width; ++w)
         {
-            auto out = out_;
-            out_ += stride;
-            for (uint32_t w = 0; w < width; ++w)
-            {
-                if (channels.size() >= 3)
-                {
-                    int r = channels[0][pos];
-                    int g = channels[1][pos];
-                    int b = channels[2][pos];
-                    g -= ((r + b) / 4);
-                    r += g;
-                    b += g;
+            if (channels.size() >= 3) {
+                int r = channels[0][pos];
+                int g = channels[1][pos];
+                int b = channels[2][pos];
+                g -= ((r + b) / 4);
+                r += g;
+                b += g;
+                if constexpr (std::is_same_v<T, uint8_t>) {
                     out[0] = std::max(0, std::min(255, r));
                     out[1] = std::max(0, std::min(255, g));
                     out[2] = std::max(0, std::min(255, b));
+                } else if constexpr (std::is_same_v<T, uint16_t>) {
+                    out[0] = std::max(0, std::min(65535, r));
+                    out[1] = std::max(0, std::min(65535, g));
+                    out[2] = std::max(0, std::min(65535, b));
                 }
-                for (size_t n = 3; n < channels.size(); ++n)
-                {
-                    out[n] = std::max(int16_t{0}, std::min(int16_t{255}, channels[n][pos]));
-                }
-                out += channels.size();
-                pos++;
             }
+            for (size_t n=3; n < channels.size(); ++n) {
+                if constexpr (std::is_same_v<T, uint8_t>) {
+                    out[n] = std::max(int16_t{0}, std::min(int16_t{255}, channels[n][pos]));
+                } else if constexpr (std::is_same_v<T, uint16_t>) {
+                    out[n] = std::max(int16_t{0}, std::min(int16_t{65535}, channels[n][pos]));
+                }
+            }
+            out += channels.size();
+            pos++;
         }
-        return res;
     }
+    return res;
+}
 
     inline std::vector<uint8_t> encodeChannel(const int16_t *data, uint32_t width, uint32_t height)
     {
@@ -232,7 +231,7 @@ namespace llcomp
 
     std::vector<uint8_t> compressImage(const uint8_t *rgb, uint32_t width, uint32_t height, uint32_t channels)
     {
-        auto planar = split_8bit_pixels_into_int16_channels(rgb, channels, width, height);
+        auto planar = split_rgb_into_planar(rgb, channels, width, height);
         auto out = std::vector(planar.size(), std::vector(0, uint8_t{}));
         std::vector<std::future<std::vector<uint8_t>>> futures;
         futures.reserve(channels);
@@ -285,7 +284,7 @@ namespace llcomp
         for (auto &future : futures)
             future.get();
 
-        return {join_int16_channels_to_8bit_pixels(planar, hdr.width, hdr.height, 0),
+        return {join_planar_into_rgb(planar, hdr.width, hdr.height, 0),
                 hdr.width, hdr.height, hdr.channel_nb};
     }
 
