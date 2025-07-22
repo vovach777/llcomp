@@ -1,5 +1,4 @@
 #pragma once
-//#define BUGFREE_CODE
 #include <algorithm>
 #include <cstdint>
 #include <cmath>
@@ -27,16 +26,18 @@ namespace BitStream {
     }
 #endif
 
+template <typename Flush>
 struct Writer {
+    Flush flush_f;
     alignas(8) uint64_t buf{0};
     uint32_t left{64};
+    Writer(Flush flush_f) : flush_f(flush_f) {}
 
 /**
  * Write up to 32 bits into a bitstream.
  */
 
-template <typename Flush>
-inline void put_bits(uint32_t n, uint32_t value, Flush && flush)
+inline void put_bits(uint32_t n, uint32_t value)
 {
     if (n == 0)
         return;
@@ -52,7 +53,7 @@ inline void put_bits(uint32_t n, uint32_t value, Flush && flush)
         buf <<= left;
         buf |= static_cast<uint64_t>(value) >> rem;
         alignas(8) uint64_t bswapped = bswap64(buf);
-        flush(reinterpret_cast<const uint8_t *>(&bswapped), 8);
+        flush_f(reinterpret_cast<const uint8_t *>(&bswapped), 8);
         left += 64 - n;
         buf = value; //it's ok that have extra MSB rem bits.. it's cuts on flush later
     }
@@ -64,8 +65,7 @@ inline void byte_align() {
     left -= shift;
 }
 
-template <typename Flush>
-void flush(Flush && flush_f) {
+void flush() {
     if (left < 64) {
         buf <<= left;
         uint64_t bswapped = bswap64(buf);
@@ -77,15 +77,16 @@ void flush(Flush && flush_f) {
 }
 
 };
-
+template <typename Refill>
 struct Reader
 {
+    Refill refill;
     uint32_t buf32{0};
     uint64_t buf64{0}; // stores bits read from the buffer
     uint32_t bits_valid_64{0}; // number of bits left in bits field
+    Reader(Refill refill) : refill(refill) {}
 
-    template <typename Refill>
-    inline void skip(uint32_t n, Refill&& refill)
+    inline void skip(uint32_t n)
     {
         assert(n <= 32);
 
@@ -108,8 +109,7 @@ struct Reader
             n -= take;
         }
     }
-    template <typename Refill>
-    inline void init(Refill&& refill)
+    inline void init()
     {
         auto [data, len] = refill();
         if (len < 8) {
@@ -131,6 +131,7 @@ struct Reader
     inline uint32_t peek_n(uint32_t n)
     {
         assert(n != 0);
+        assert(n <= 32);
 
         return n == 32 ? buf32 : (buf32 >> (32-n));
     }
@@ -153,59 +154,36 @@ namespace Rice
     }
 
     // Rice code: Encode unsigned integer x with parameter m
-    template <typename WriteBits>
-    void write(uint32_t x, uint32_t m, WriteBits &&writeBits)
+    template <typename Writer>
+    void write(uint32_t x, uint32_t m, Writer &&writer)
     {
-#if 0
-        auto quotient = x >> m; // Math.floor(x / (1 << m))
-        auto remainder = x & ((1 << m) - 1);
-        while (quotient--)
-            writeBits(1,1);
-        writeBits(1,0);
-        writeBits(m, remainder);
-#else
         auto quotient = x >> m; // Math.floor(x / (1 << m))
         auto remainder = x & ((1 << m) - 1);
         while (quotient >= 32)
         {
-            writeBits(32,0xffffffffu);
+            writer.put_bits(32,0xffffffffu);
             quotient -= 32;
         }
-        writeBits(quotient + 1, ((1ULL << (quotient))-1) << 1); // Write quotient bits
-        writeBits(m, remainder);
-#endif
+        writer.put_bits(quotient + 1, ((1ULL << (quotient))-1) << 1); // Write quotient bits
+        writer.put_bits(m, remainder);
     }
-    template <typename Peek32, typename Skip>
-    uint32_t read(uint32_t m, Peek32 &&peek32, Skip &&skip)
+    template <typename Reader>
+    uint32_t read(uint32_t m, Reader&& reader)
     {
-#if 0
         uint32_t quotient = 0;
-        while (peek32() >> 31 == 1) {
-            skip(1);
-            quotient++;
-        }
-        skip(1);
-        auto remainder = m == 0  ? 0 : ( peek32() >> (32 - m) );
-        skip(m);
-        return (quotient << m) | remainder;
-
-#else
-        uint32_t quotient = 0;
-        while (peek32() == 0xffffffffu)
+        while (reader.peek32() == 0xffffffffu)
         {
             quotient += 32;
-            skip(32);
+            reader.skip(32);
         }
-        auto ones_in_buffer = __builtin_clz(~peek32());
-        skip(ones_in_buffer + 1);
+        auto ones_in_buffer = __builtin_clz(~reader.peek32());
+        reader.skip(ones_in_buffer + 1);
         quotient += ones_in_buffer;
         if (m) {
-            auto remainder = peek32() >> (32 - m);
-            skip(m);
+            auto remainder = reader.peek32() >> (32 - m);
+            reader.skip(m);
             return remainder + (quotient << m);
         }
         return quotient;
-
-#endif
     }
 }
