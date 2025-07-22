@@ -79,8 +79,8 @@ namespace RLGR {
  std::pair<int, size_t> decode()
  {
 
-		 int16_t mag{};
-		 uint16_t code{0};
+		 int mag{};
+		 uint32_t code{0};
 		 uint32_t cnt{};
 		 uint32_t vk{};
 		 if (k)
@@ -150,7 +150,7 @@ namespace RLGR {
 			 /* next kr bits contain code remainder */
 
 			 if (kr > 0) {
-				 code = static_cast<uint16_t>((peek32() >> (32 - kr)));
+				 code = (peek32() >> (32 - kr));
 			 	skip32(kr);
 			 }
 
@@ -193,9 +193,9 @@ namespace RLGR {
 			 /* compute magnitude from code */
 
 			 if (sign)
-				 mag = static_cast<int16_t>(code + 1) * -1;
+				 mag = static_cast<int>(code + 1) * -1;
 			 else
-				 mag = static_cast<int16_t>(code + 1);
+				 mag = static_cast<int>(code + 1);
 
 			 /* write to output stream */
 
@@ -222,7 +222,7 @@ namespace RLGR {
 			 /* next kr bits contain code remainder */
 
 			 if (kr > 0) {
-				 code = static_cast<uint16_t>((peek32() >> (32 - kr)));
+				 code = (peek32() >> (32 - kr));
 			 }
 			 skip32(kr);
 
@@ -284,9 +284,9 @@ namespace RLGR {
 				*/
 
 				if (code & 1)
-					mag = static_cast<int16_t>((code + 1) >> 1) * -1;
+					mag = static_cast<int>((code + 1) >> 1) * -1;
 				else
-					mag = static_cast<int16_t>(code >> 1);
+					mag = static_cast<int>(code >> 1);
 			}
 
 			return {mag,size_t{0}};
