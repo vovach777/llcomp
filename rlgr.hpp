@@ -316,11 +316,13 @@ template <typename OutputBits>
  }
 
  inline void outputBits(uint32_t n, uint32_t val) {
-	assert(val <= 0xffff);
-	while (n > 32u) {
-	  auto part = std::min(32u, n-32u);
-	  outputBits32(part,0);
-	  n -= part;
+	//assert(val <= 0xffff);
+	if (n > 32u) {
+	//   auto part = std::min(32u, n-32u);
+	//   outputBits32(part,0);
+	//   n -= part;
+		std::cerr << "Error: outputBits called with n > 32" << std::endl;
+		throw std::runtime_error("outputBits called with n > 32");
 
 	}
 	outputBits32(n,val);
@@ -335,13 +337,22 @@ template <typename OutputBits>
 	 /* unary part of GR code */
 
 	 const uint32_t vk = val >> kr;
-	 outputBits(vk, 1);
-	 outputBits(1, 0);
+	 // Original: OutputBit(bs, vk, 1) -> sequence of bits
+	 // Original: OutputBit(bs, 1, 0) -> sequence of bits
+
+	auto quotient = vk;
+	while (quotient >= 32)
+	{
+		outputBits(32,0xffffffffu);
+		quotient -= 32;
+	}
+	outputBits(quotient + 1, ((1ULL << (quotient))-1) << 1); // Write quotient bits
+
 
 	 /* remainder part of GR code, if needed */
 	 if (kr)
 	 {
-		 outputBits(kr, val & ((1 << kr) - 1));
+		 outputBits(kr, val & ((1 << kr) - 1)); // Original: OutputBits(kr, ...) -> pattern
 	 }
 
 	 /* update krp, only if it is not equal to 1 */
@@ -373,17 +384,17 @@ template <typename OutputBits>
 			 uint32_t runmax = 1 << k;
 			 while (numZeros >= runmax)
 			 {
-				 outputBits(1, 0); /* output a zero bit */
+				 outputBits(1, 0); /* output a zero bit */ // Original: OutputBit(bs, 1, 0) -> sequence of bits
 				 numZeros -= runmax;
 				 k = UpdateParam(kp, UP_GR); /* update kp, k */
 				 runmax = 1 << k;
 			 }
 
 			 /* output a 1 to terminate runs */
-			 outputBits(1, 1);
+			 outputBits(1, 1); // Original: OutputBit(bs, 1, 1) -> sequence of bits
 
 			 /* output the remaining run length using k bits */
-			 outputBits(k, numZeros);
+			 outputBits(k, numZeros); // Original: OutputBits(k, numZeros) -> pattern
 			 numZeros=0;
 
 			 /* note: when we reach here and the last byte being encoded is 0, we still
@@ -392,7 +403,7 @@ template <typename OutputBits>
 			 /* encode the nonzero value using GR coding */
 			 const uint32_t mag = static_cast<uint32_t>(input < 0 ? -input : input); /* absolute value of input coefficient */
 			 /* sign of input coefficient */
-			 outputBits(1, (input < 0 ? 1 : 0));          /* output the sign bit */
+			 outputBits(1, (input < 0 ? 1 : 0));          /* output the sign bit */ // Original: OutputBits(1, sign) -> pattern
 			 CodeGR(krp, mag ? mag - 1 : 0); /* output GR code for (mag - 1) */
 
 			 k = UpdateParam(kp, -DN_GR);
