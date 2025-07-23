@@ -22,15 +22,26 @@ int main(int argc, char** argv) {
     }
     const char* filename = argv[1];
     int width, height, channels;
-    auto stb_img = stbi_load(argv[1] , &width, &height, &channels, 0);
-    if (stb_img == nullptr) {
-        std::cerr << "Error loading image: " << stbi_failure_reason() << std::endl;
-        return 1;
+    std::vector<uint8_t> compressed;
+    if (stbi_is_16_bit(filename))
+    {
+        auto stb_img = stbi_load_16(filename , &width, &height, &channels, 0);
+        if (stb_img == nullptr) {
+            std::cerr << "Error loading image: " << stbi_failure_reason() << std::endl;
+            return 1;
+        }
+        compressed = llcomp::compressImage(stb_img, uint32_t(width), uint32_t(height), uint32_t(channels) );
+        stbi_image_free(stb_img);
+    } else {
+        auto stb_img = stbi_load(filename , &width, &height, &channels, 0);
+        if (stb_img == nullptr) {
+            std::cerr << "Error loading image: " << stbi_failure_reason() << std::endl;
+            return 1;
+        }
+        compressed = llcomp::compressImage(stb_img, uint32_t(width), uint32_t(height), uint32_t(channels) );
+        stbi_image_free(stb_img);
     }
-    std::vector<uint8_t> rgb = std::vector<uint8_t>(stb_img, stb_img + width * height * channels);
-    stbi_image_free(stb_img);
 
-    std::vector<uint8_t> compressed = llcomp::compressImage(rgb.data(), uint32_t(width), uint32_t(height), uint32_t(channels) );
     std::string outputFile = std::string(filename) + llcomp::ext;
     std::ofstream outFile(outputFile, std::ios::binary);
     if (!outFile) {

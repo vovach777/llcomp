@@ -14,6 +14,7 @@
 #include <utility>
 #include <type_traits>
 #include <future>
+#include <limits>
 #include "bitstream.hpp"
 #include "rlgr.hpp"
 
@@ -48,23 +49,26 @@ namespace llcomp
         return b;
     }
 
-    template <typename T>
-auto split_rgb_into_planar(const T* _data, int channels, int width, int height, size_t stride=0)
+template <int src_depth=15, int dest_depth=15, typename T>
+auto split_rgb_into_planar(const T* data, int channels, int width, int height)
 {
-    if (stride == 0) {
-        stride = width*channels;
-    }
     auto res = std::vector(channels, std::vector(width*height,int16_t{}));
     size_t pos{0};
+    constexpr int max_src_value = (1 << src_depth) -1;
 
     for (int h = 0; h < height; ++h) {
-        auto data  = _data;
-        _data += stride;
         for (int w = 0; w < width; ++w) {
             if (channels >= 3) {
                 int r = data[0];
                 int g = data[1];
                 int b = data[2];
+                if (r > max_value || g > max_value || c > max_value) {
+                    throw std::invalid_argument("wrong source depth!");
+                if constexpr (dest_depth < src_depth) {
+                    r >>= src_depth-dest_depth;
+                    g >>= src_depth-dest_depth;
+                    b >>= src_depth-dest_depth;
+                }
                 b -= g;
                 r -= g;
                 g += (b + r) / 4;
@@ -87,18 +91,13 @@ auto split_rgb_into_planar(const T* _data, int channels, int width, int height, 
     return res;
 }
 
-template <typename T>
-std::vector<T> join_planar_into_rgb(std::vector<std::vector<int16_t>> & channels, uint32_t width, uint32_t height, size_t stride=0) {
 
-    if (stride == 0) {
-        stride = width*channels.size();
-    }
-    auto res = std::vector(stride*height,T{});
-    auto out_ = res.data();
+template <typename T>
+void join_planar_into_rgb(std::vector<std::vector<int16_t>> & channels, uint32_t width, uint32_t height, T* dest) {
+
     size_t pos = 0;
     for (uint32_t h=0; h < height; ++h)
     {
-        auto out = out_; out_ += stride;
         for (uint32_t w=0; w < width; ++w)
         {
             if (channels.size() >= 3) {
@@ -109,14 +108,15 @@ std::vector<T> join_planar_into_rgb(std::vector<std::vector<int16_t>> & channels
                 r += g;
                 b += g;
                 if constexpr (std::is_same_v<T, uint8_t>) {
-                    out[0] = std::max(0, std::min(255, r));
-                    out[1] = std::max(0, std::min(255, g));
-                    out[2] = std::max(0, std::min(255, b));
+                    dest[0] = std::max(0, std::min(255, r));
+                    dest[1] = std::max(0, std::min(255, g));
+                    dest[2] = std::max(0, std::min(255, b));
                 } else if constexpr (std::is_same_v<T, uint16_t>) {
-                    out[0] = std::max(0, std::min(65535, r));
-                    out[1] = std::max(0, std::min(65535, g));
-                    out[2] = std::max(0, std::min(65535, b));
-                }
+                    dest[0] = std::max(0, std::min(65535, r));
+                    dest[1] = std::max(0, std::min(65535, g));
+                    dest[2] = std::max(0, std::min(65535, b));
+                } else
+                    static_assert(false);
             }
             for (size_t n=3; n < channels.size(); ++n) {
                 if constexpr (std::is_same_v<T, uint8_t>) {
@@ -229,7 +229,8 @@ std::vector<T> join_planar_into_rgb(std::vector<std::vector<int16_t>> & channels
         uint32_t channel_nb;    // r,g,b,n1,n2,n3,n4...
     };
 
-    std::vector<uint8_t> compressImage(const uint8_t *rgb, uint32_t width, uint32_t height, uint32_t channels)
+    template <typename T>
+    std::vector<uint8_t> compressImage(const T *rgb, uint32_t width, uint32_t height, uint32_t channels)
     {
         auto planar = split_rgb_into_planar(rgb, channels, width, height);
         auto out = std::vector(planar.size(), std::vector(0, uint8_t{}));
