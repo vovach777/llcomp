@@ -12,10 +12,6 @@
 
 
 int main(int argc, char** argv) {
-    // if (llcomp::binarization::ilog2_32<0>(uint32_t{1}) == 0) {
-    //     std::cerr << "Unsafe behavior is enabled" << std::endl;
-    //     return;
-    // }
     if (argc < 2) {
         std::cerr << "Usage: " << argv[0] << " <image_path>" << std::endl;
         return 1;
@@ -25,21 +21,21 @@ int main(int argc, char** argv) {
     std::vector<uint8_t> compressed;
     if (stbi_is_16_bit(filename))
     {
-        auto stb_img = stbi_load_16(filename , &width, &height, &channels, 0);
+        const uint16_t* stb_img = stbi_load_16(filename , &width, &height, &channels, 0);
         if (stb_img == nullptr) {
             std::cerr << "Error loading image: " << stbi_failure_reason() << std::endl;
             return 1;
         }
-        compressed = llcomp::compressImage(stb_img, uint32_t(width), uint32_t(height), uint32_t(channels) );
-        stbi_image_free(stb_img);
+        compressed = llcomp::compressImage(stb_img, uint32_t(width), uint32_t(height), uint32_t(channels),15 );
+        stbi_image_free((stbi_us *)stb_img);
     } else {
         auto stb_img = stbi_load(filename , &width, &height, &channels, 0);
         if (stb_img == nullptr) {
             std::cerr << "Error loading image: " << stbi_failure_reason() << std::endl;
             return 1;
         }
-        compressed = llcomp::compressImage(stb_img, uint32_t(width), uint32_t(height), uint32_t(channels) );
-        stbi_image_free(stb_img);
+        compressed = llcomp::compressImage(stb_img, uint32_t(width), uint32_t(height), uint32_t(channels),8 );
+        stbi_image_free((stbi_us *)stb_img);
     }
 
     std::string outputFile = std::string(filename) + llcomp::ext;
