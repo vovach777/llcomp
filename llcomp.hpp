@@ -54,7 +54,7 @@ namespace llcomp
     }
 
 
-    template <int src_depth = 15, int dest_depth = 15, typename T>
+    template <int src_depth, int dest_depth, typename T>
     auto split_rgb_into_planar(const T* data, int channels, int width, int height)
     {
         using DestType = std::conditional_t<(dest_depth > 15), int32_t, int16_t>;
@@ -272,11 +272,12 @@ void join_planar_into_rgb(const std::vector<std::vector<S>> & channels, uint32_t
         }
     };
 
-    template <typename T>
-    std::vector<uint8_t> compressImage(const T *rgb, uint32_t width, uint32_t height, uint32_t channels, int channels_depth)
+    template <int src_depth, int dest_depth, typename T>
+    std::vector<uint8_t> compressImage(const T *rgb, uint32_t width, uint32_t height, uint32_t channels)
     {
-        auto planar = split_rgb_into_planar(rgb, channels, width, height);
+        auto planar = split_rgb_into_planar<src_depth, dest_depth>(rgb, channels, width, height);
         auto out = std::vector(planar.size(), std::vector(0, uint8_t{}));
+        constexpr auto channels_depth = dest_depth;
         std::vector<std::future<std::vector<uint8_t>>> futures;
         futures.reserve(channels);
 

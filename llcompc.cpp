@@ -16,6 +16,7 @@ int main(int argc, char** argv) {
         std::cerr << "Usage: " << argv[0] << " <image_path>" << std::endl;
         return 1;
     }
+    try {
     const char* filename = argv[1];
     int width, height, channels;
     std::vector<uint8_t> compressed;
@@ -26,7 +27,7 @@ int main(int argc, char** argv) {
             std::cerr << "Error loading image: " << stbi_failure_reason() << std::endl;
             return 1;
         }
-        compressed = llcomp::compressImage(stb_img, uint32_t(width), uint32_t(height), uint32_t(channels),15 );
+        compressed = llcomp::compressImage<16,16>(stb_img, uint32_t(width), uint32_t(height), uint32_t(channels) );
         stbi_image_free((stbi_us *)stb_img);
     } else {
         auto stb_img = stbi_load(filename , &width, &height, &channels, 0);
@@ -34,8 +35,8 @@ int main(int argc, char** argv) {
             std::cerr << "Error loading image: " << stbi_failure_reason() << std::endl;
             return 1;
         }
-        compressed = llcomp::compressImage(stb_img, uint32_t(width), uint32_t(height), uint32_t(channels),8 );
-        stbi_image_free((stbi_us *)stb_img);
+        compressed = llcomp::compressImage<8,8>(stb_img, uint32_t(width), uint32_t(height), uint32_t(channels) );
+        stbi_image_free((void *)stb_img);
     }
 
     std::string outputFile = std::string(filename) + llcomp::ext;
@@ -47,4 +48,11 @@ int main(int argc, char** argv) {
     outFile.write(reinterpret_cast<const char*>(compressed.data()), compressed.size());
     outFile.close();
     return 0;
+    } catch (const std::exception& e) {
+        std::cerr << "Error decompressing image: " << e.what() << std::endl;
+        return 1;
+    } catch (...) {
+        std::cerr << "Unknown error occurred" << std::endl;
+        return 2;
+    }
 }
