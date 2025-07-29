@@ -9,7 +9,6 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
-#include <cstdint>
 #include <functional>
 #include <utility>
 #include <type_traits>
@@ -27,32 +26,12 @@
 namespace llcomp
 {
     constexpr inline auto ext = ".llr";
-    constexpr inline uint8_t rev = '1';
+    constexpr inline uint8_t rev = '0';
     constexpr inline uint32_t signature = 'l' | 'l' << 8U | 'r' << 16U | rev << 24U;
 
     inline int median(int a, int b, int c)
     {
-        if (a > b)
-        {
-            if (c > b)
-            {
-                if (c > a)
-                    b = a;
-                else
-                    b = c;
-            }
-        }
-        else
-        {
-            if (b > c)
-            {
-                if (c > a)
-                    b = c;
-                else
-                    b = a;
-            }
-        }
-        return b;
+        return a + b + c - std::max({a, b, c}) - std::min({a, b, c});
     }
 
 
@@ -324,14 +303,14 @@ void join_planar_into_rgb(const std::vector<std::vector<S>> & channels, uint32_t
                                      {
                                          if (data + 8 <= data_end)
                                          {
-                                             data += 8;
+                                            data += 8;
                                              return std::make_pair(data - 8, size_t{8});
                                          }
                                          else
                                          {
                                              size_t rem = data_end - data;
                                              return std::make_pair(data_end - rem, rem);
-                                         }
+                                        }
                                      }};
         bit_stream.init();
 
@@ -398,11 +377,16 @@ void join_planar_into_rgb(const std::vector<std::vector<S>> & channels, uint32_t
         constexpr uint8_t channels_depth = dest_depth;
         std::vector<std::future<std::vector<uint8_t>>> futures;
         futures.reserve(channels);
+        #ifdef NDEBUG
+        bool one_thread = false;
+        #else
+        bool one_thread = true;
+        #endif
 
         for (size_t i = 0; i < out.size(); ++i)
         {
             futures.push_back(
-                std::async(i==0 ? std::launch::deferred : std::launch::async, [&](size_t n)
+                std::async(i==0 || one_thread ? std::launch::deferred : std::launch::async, [&](size_t n)
                            { return encodeChannel(planar[n].data(), width, height); }, i));
         }
 
@@ -442,10 +426,15 @@ void join_planar_into_rgb(const std::vector<std::vector<S>> & channels, uint32_t
         for (size_t i = 0; i < planar.size(); ++i)
         {
             size_t size;
+            #ifdef NDEBUG
+            bool one_thread = false;
+            #else
+            bool one_thread = true;
+            #endif
             std::copy(begin, begin + sizeof(size), reinterpret_cast<uint8_t *>(&size));
             begin += sizeof(size);
             futures.push_back(
-                std::async( i==0 ? std::launch::deferred : std::launch::async, [&](const uint8_t *begin, const uint8_t *end, DestType *pixels)
+                std::async( i==0 || one_thread ? std::launch::deferred : std::launch::async, [&](const uint8_t *begin, const uint8_t *end, DestType *pixels)
                            {
                                decodeChannel(hdr.width, hdr.height, begin, end, pixels);
                                return true;
