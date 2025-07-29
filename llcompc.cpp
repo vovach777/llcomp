@@ -4,39 +4,50 @@
 #include <fstream>
 #include <vector>
 #include "llcomp.hpp"
-#define STB_IMAGE_IMPLEMENTATION
-   #define STBI_NO_GIF
-   #define STBI_NO_PSD
-   #define STBI_NO_PIC
-#include "stb_image.h"
-
+#include "profiling.hpp"
 
 int main(int argc, char** argv) {
+    profiling::StopWatch execute_time;
+    execute_time.startnew();
     if (argc < 2) {
         std::cerr << "Usage: " << argv[0] << " <image_path>" << std::endl;
         return 1;
     }
     try {
     const char* filename = argv[1];
-    int width, height, channels;
     std::vector<uint8_t> compressed;
-    if (stbi_is_16_bit(filename))
+    llcomp::RawImage img;
+    img.load(std::string(filename));
+    img.le();
+    switch (img.bits_per_channel)
     {
-        const uint16_t* stb_img = stbi_load_16(filename , &width, &height, &channels, 0);
-        if (stb_img == nullptr) {
-            std::cerr << "Error loading image: " << stbi_failure_reason() << std::endl;
-            return 1;
+        case 8:  {
+            compressed = llcomp::compressImage<8,8>(img.as<uint8_t>(), img.width, img.height, img.channel_nb );
+            break;
         }
-        compressed = llcomp::compressImage<16,16>(stb_img, uint32_t(width), uint32_t(height), uint32_t(channels) );
-        stbi_image_free((stbi_us *)stb_img);
-    } else {
-        auto stb_img = stbi_load(filename , &width, &height, &channels, 0);
-        if (stb_img == nullptr) {
-            std::cerr << "Error loading image: " << stbi_failure_reason() << std::endl;
-            return 1;
+        case 10:  {
+            compressed = llcomp::compressImage<10,10>(img.as<uint16_t>(), img.width, img.height, img.channel_nb );
+            break;
         }
-        compressed = llcomp::compressImage<8,8>(stb_img, uint32_t(width), uint32_t(height), uint32_t(channels) );
-        stbi_image_free((void *)stb_img);
+        case 12: {
+            compressed = llcomp::compressImage<12,12>(img.as<uint16_t>(), img.width, img.height, img.channel_nb );
+            break;
+        }
+        case 14: {
+            compressed = llcomp::compressImage<14,14>(img.as<uint16_t>(), img.width, img.height, img.channel_nb );
+            break;
+        }
+        case 15: {
+            compressed = llcomp::compressImage<15,15>(img.as<uint16_t>(), img.width, img.height, img.channel_nb );
+            break;
+        }
+        case 16: {
+            compressed = llcomp::compressImage<16,16>(img.as<uint16_t>(), img.width, img.height, img.channel_nb );
+            break;
+        }
+        default: {
+            throw std::runtime_error("fail to load image: unknown bits per channal value!");
+        }
     }
 
     std::string outputFile = std::string(filename) + llcomp::ext;
@@ -47,7 +58,6 @@ int main(int argc, char** argv) {
     }
     outFile.write(reinterpret_cast<const char*>(compressed.data()), compressed.size());
     outFile.close();
-    return 0;
     } catch (const std::exception& e) {
         std::cerr << "Error decompressing image: " << e.what() << std::endl;
         return 1;
@@ -55,4 +65,7 @@ int main(int argc, char** argv) {
         std::cerr << "Unknown error occurred" << std::endl;
         return 2;
     }
+    execute_time.stop();
+    std::cout << "time: " << execute_time.elapsed_str() << std::endl;
+    return 0;
 }

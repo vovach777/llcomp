@@ -18,6 +18,8 @@
 #include <memory>
 #include <type_traits>
 #include <nmmintrin.h>
+#include <sstream>
+#include <fstream>
 
 #include "bitstream.hpp"
 #include "rlgr.hpp"
@@ -170,6 +172,19 @@ void join_planar_into_rgb(const std::vector<std::vector<S>> & channels, uint32_t
         return buffer;
     }
 
+    template<typename F>
+    class Defer {
+        F func;
+    public:
+        Defer(F&& f) : func(std::forward<F>(f)) {}
+        ~Defer() { func(); }
+    };
+
+    template<typename F>
+    Defer<F> make_defer(F&& f) {
+        return Defer<F>(std::forward<F>(f));
+    }
+
     struct RawImage
     {
         std::unique_ptr<uint8_t[]> data{};
@@ -177,7 +192,7 @@ void join_planar_into_rgb(const std::vector<std::vector<S>> & channels, uint32_t
         uint32_t height{};
         uint32_t channel_nb{};
         uint8_t bits_per_channel{};
-        enum class ChannelType{ none, uint8, uint16, int32 };
+        enum class ChannelType{ none, uint8, uint16, uint16be, int32 };
         ChannelType channel_type{ ChannelType::none };
 
         template<typename T>
@@ -191,6 +206,110 @@ void join_planar_into_rgb(const std::vector<std::vector<S>> & channels, uint32_t
             static_assert(std::is_same_v<T, uint8_t> || std::is_same_v<T, uint16_t> || std::is_same_v<T, int32_t>,
                 "Unsupported type in RawImage::as()");
             return reinterpret_cast<const T*>(data.get());
+        }
+
+        static inline auto get_next_line(std::ifstream& in,  bool check_comment = false)
+        {
+            for (;;)
+            {
+                std::string line{};
+                if (!(in.eof() || in.fail()))
+                {
+                    std::getline(in, line);
+                    if (!line.empty() && check_comment && line[0] == '#')
+                        continue;
+                }
+                return line;
+            }
+        }
+
+        static inline uint32_t lzcnt_s(uint32_t x)
+        {
+            return (x) ? __builtin_clz(x) : 32;
+        }
+
+        static void swap_bytes_16bit_sse(uint16_t* data, size_t count) {
+            size_t i = 0;
+            size_t simd_count = count & ~7; // по 8 uint16_t = 16 байт = 128 бит
+
+            const __m128i shuffle_mask = _mm_set_epi8(
+                14,15,12,13,10,11,8,9,6,7,4,5,2,3,0,1
+            );
+
+            for (; i < simd_count; i += 8) {
+                __m128i v = _mm_loadu_si128(reinterpret_cast<const __m128i*>(data + i));
+                v = _mm_shuffle_epi8(v, shuffle_mask);
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(data + i), v);
+            }
+
+            // оставшиеся
+            for (; i < count; ++i) {
+                uint16_t val = data[i];
+                data[i] = (val >> 8) | (val << 8);
+            }
+        }
+
+        void load(const std::string& filename) {
+            std::ifstream in(filename, std::ios::binary);
+            if (!in) {
+                throw std::runtime_error("Failed to open file for reading");
+            }
+            if (get_next_line(in) != "P6")
+                throw std::invalid_argument("Invalid PGM format\nuse: ffmpeg -i input.png -pix_fmt rgb48 output.ppm");
+
+            std::istringstream pgm_width_height_is(get_next_line(in,true));
+            std::istringstream pgm_bits_per_channel_is(get_next_line(in));
+
+            pgm_width_height_is >> width >> height;
+            uint32_t maxvalue{};
+            pgm_bits_per_channel_is >> maxvalue;
+            bits_per_channel = 32 - lzcnt_s( maxvalue );
+            channel_nb = 3;
+
+            if (width == 0 || height == 0 || bits_per_channel == 0 || bits_per_channel > 16 )
+                throw std::invalid_argument("Invalid PPM format");
+            auto size = size_t(width) * height * channel_nb * (bits_per_channel > 8 ? 2 : 1);
+            data = std::make_unique<uint8_t[]>(size);
+            in.read(reinterpret_cast<char*>(data.get()),size);
+            if (bits_per_channel > 8) {
+                channel_type = ChannelType::uint16be;
+            } else {
+                channel_type = ChannelType::uint8;
+            }
+
+        }
+        inline void save( const std::string& filename ) {
+            using ChannelType = llcomp::RawImage::ChannelType;
+
+            if (channel_nb != 3) {
+                throw std::runtime_error("channel_nb != 3");
+            }
+            if (!(channel_type == ChannelType::uint8 || channel_type == ChannelType::uint16 || channel_type == ChannelType::uint16be )) {
+                throw std::runtime_error("Unsupported channel type for PPM output");
+            }
+
+            std::ofstream out(filename, std::ios::binary);
+            if (!out) {
+                throw std::runtime_error("Failed to open file for writing");
+            }
+
+            out << "P6\n" << width << ' ' << height << "\n" << (uint32_t{1} << bits_per_channel)-1 << "\n";
+
+            be();
+            out.write(reinterpret_cast<char*>(data.get()), width*height*3* (channel_type==ChannelType::uint8 ? 1 : 2));
+
+        }
+        inline void le() {
+            if (channel_type == ChannelType::uint16be) {
+                swap_bytes_16bit_sse(as<uint16_t>(), width * height * channel_nb);
+                channel_type = ChannelType::uint16;
+            }
+        }
+        inline void be() {
+            if (channel_type == ChannelType::uint16) {
+                swap_bytes_16bit_sse(as<uint16_t>(), width * height * channel_nb);
+                channel_type = ChannelType::uint16be;
+            }
         }
 
     };
@@ -233,8 +352,7 @@ void join_planar_into_rgb(const std::vector<std::vector<S>> & channels, uint32_t
                 int pixel = predict + (ziros == 0 ? next : 0);
                 if constexpr (std::is_same_v<T, int32_t> == false ) {
                     if (pixel < std::numeric_limits<T>::min() || pixel > std::numeric_limits<T>::max()) {
-                        std::cerr << "Pixel value out of range: " << pixel << std::endl;
-                        abort(); //TODO: wa hardcoded exit
+                        throw std::runtime_error( "Pixel value out of range");
                     }
                 }
                 *pixels++ = pixel;
@@ -284,7 +402,7 @@ void join_planar_into_rgb(const std::vector<std::vector<S>> & channels, uint32_t
         for (size_t i = 0; i < out.size(); ++i)
         {
             futures.push_back(
-                std::async(true ? std::launch::deferred : std::launch::async, [&](size_t n)
+                std::async(i==0 ? std::launch::deferred : std::launch::async, [&](size_t n)
                            { return encodeChannel(planar[n].data(), width, height); }, i));
         }
 
@@ -327,7 +445,7 @@ void join_planar_into_rgb(const std::vector<std::vector<S>> & channels, uint32_t
             std::copy(begin, begin + sizeof(size), reinterpret_cast<uint8_t *>(&size));
             begin += sizeof(size);
             futures.push_back(
-                std::async(true ? std::launch::deferred : std::launch::async, [&](const uint8_t *begin, const uint8_t *end, DestType *pixels)
+                std::async( i==0 ? std::launch::deferred : std::launch::async, [&](const uint8_t *begin, const uint8_t *end, DestType *pixels)
                            {
                                decodeChannel(hdr.width, hdr.height, begin, end, pixels);
                                return true;
