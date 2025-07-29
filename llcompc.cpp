@@ -15,7 +15,7 @@ int main(int argc, char** argv) {
     }
     try {
     const char* filename = argv[1];
-    std::vector<uint8_t> compressed;
+    std::vector<uint64_t> compressed;
     llcomp::RawImage img;
     img.load(std::string(filename));
     img.le();
@@ -56,7 +56,7 @@ int main(int argc, char** argv) {
         std::cerr << "Error opening output file: " << outputFile << std::endl;
         return 1;
     }
-    outFile.write(reinterpret_cast<const char*>(compressed.data()), compressed.size());
+    outFile.write(reinterpret_cast<const char*>(compressed.data()), compressed.size()*sizeof(uint64_t));
     outFile.close();
     } catch (const std::exception& e) {
         std::cerr << "Error decompressing image: " << e.what() << std::endl;

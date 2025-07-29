@@ -28,9 +28,9 @@ namespace BitStream {
 
 template <typename Flush>
 struct Writer {
-    Flush flush_f;
-    alignas(8) uint64_t buf{0};
+    uint64_t buf{0};
     uint32_t left{64};
+    Flush flush_f;
     Writer(Flush flush_f) : flush_f(flush_f) {}
 
 /**
@@ -52,8 +52,7 @@ inline void put_bits(uint32_t n, uint32_t value)
         auto rem = n - left;
         buf <<= left;
         buf |= static_cast<uint64_t>(value) >> rem;
-        alignas(8) uint64_t bswapped = bswap64(buf);
-        flush_f(reinterpret_cast<const uint8_t *>(&bswapped), 8);
+        flush_f(bswap64(buf));
         left += 64 - n;
         buf = value; //it's ok that have extra MSB rem bits.. it's cuts on flush later
     }
@@ -68,9 +67,7 @@ inline void byte_align() {
 void flush() {
     if (left < 64) {
         buf <<= left;
-        uint64_t bswapped = bswap64(buf);
-        size_t nbytes = (64 - left + 7) >> 3;
-        flush_f(reinterpret_cast<const uint8_t*>(&bswapped), nbytes);
+        flush_f(bswap64(buf));
         buf = 0;
         left = 64;
     }
@@ -80,10 +77,11 @@ void flush() {
 template <typename Refill>
 struct Reader
 {
-    Refill refill;
-    uint32_t buf32{0};
+
     uint64_t buf64{0}; // stores bits read from the buffer
+    uint32_t buf32{0};
     uint32_t bits_valid_64{0}; // number of bits left in bits field
+    Refill refill;
     Reader(Refill refill) : refill(refill) {}
 
     inline void skip(uint32_t n)
@@ -92,15 +90,8 @@ struct Reader
 
         while (n > 0) {
             if (bits_valid_64 == 0) {
-                auto [data, len] = refill();
-                if (len < 8) {
-                    buf64 = 0;
-                    std::memcpy(&buf64, data, len);
-                    buf64 = bswap64(buf64);
-                } else {
-                    buf64 = bswap64(*reinterpret_cast<const uint64_t *>(data));
-                }
-                bits_valid_64 = 64;//no eof cheching! fill with ziros infinite
+                buf64 = refill();
+                bits_valid_64 = 64;
             }
             uint32_t take = std::min(n, bits_valid_64);
             buf32 = (take == 32) ? static_cast<uint32_t>(buf64 >> 32) : (buf32 << take | static_cast<uint32_t>(buf64 >> (64 - take)));
@@ -111,17 +102,10 @@ struct Reader
     }
     inline void init()
     {
-        auto [data, len] = refill();
-        if (len < 8) {
-            uint64_t tmp = 0;
-            std::memcpy(&tmp, data, len);
-            buf64 = bswap64(tmp);
-        } else {
-            buf64 = bswap64(*reinterpret_cast<const uint64_t *>(data));
-        }
-        buf32 = static_cast<uint32_t>(buf64 >> 32);
-        buf64 <<= 32;
-        bits_valid_64 = 32;
+            buf64 = refill();
+            buf32 = static_cast<uint32_t>(buf64 >> 32);
+            buf64 <<= 32;
+            bits_valid_64 = 32;
     }
 
     inline uint32_t peek32()

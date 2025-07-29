@@ -117,19 +117,17 @@ void join_planar_into_rgb(const std::vector<std::vector<S>> & channels, uint32_t
 }
 
     template <typename T>
-    inline std::vector<uint8_t> encodeChannel(const T*data, uint32_t width, uint32_t height)
+    inline auto encodeChannel(const T*data, uint32_t width, uint32_t height)
     {
         auto size = size_t(width) * height;
-        std::vector<uint8_t> buffer;
-        buffer.reserve(size * 3 / 4);
-        BitStream::Writer bit_stream{[&](const uint8_t *data, size_t size)
+        std::vector<uint64_t> buffer;
+        buffer.reserve((size + 15)/ 16);
+        auto bi = std::back_inserter(buffer);
+        BitStream::Writer bit_stream{[&](uint64_t data)
                                      {
-                                         buffer.resize(buffer.size() + size);
-                                         if (size == 8)
-                                             std::memcpy(buffer.data() + buffer.size() - 8, data, 8);
-                                         else
-                                             std::memcpy(buffer.data() + buffer.size() - size, data, size);
+                                        *bi = data;
                                      }};
+
         RLGR::Encoder encoder{[&](uint32_t n, uint32_t val)
                               { bit_stream.put_bits(n, val); }};
         for (uint32_t h = 0; h < height; ++h)
@@ -294,24 +292,17 @@ void join_planar_into_rgb(const std::vector<std::vector<S>> & channels, uint32_t
     };
 
     template <typename T>
-    inline void decodeChannel(uint32_t width, uint32_t height, const uint8_t *data_begin, const uint8_t *data_end, T *pixels)
+    inline void decodeChannel(uint32_t width, uint32_t height, const uint64_t *data_begin, const uint64_t *data_end, T *pixels)
     {
         size_t rgb_pos = 0;
         auto data = data_begin;
 
+
         BitStream::Reader bit_stream{[&]()
-                                     {
-                                         if (data + 8 <= data_end)
-                                         {
-                                            data += 8;
-                                             return std::make_pair(data - 8, size_t{8});
-                                         }
-                                         else
-                                         {
-                                             size_t rem = data_end - data;
-                                             return std::make_pair(data_end - rem, rem);
-                                        }
-                                     }};
+                                    {
+                                        return data < data_end ? *data++ : 0x55555555ull;   
+                                    }};
+
         bit_stream.init();
 
         RLGR::Decoder decoder{[&]
@@ -370,12 +361,12 @@ void join_planar_into_rgb(const std::vector<std::vector<S>> & channels, uint32_t
     };
 
     template <int src_depth, int dest_depth, typename T>
-    std::vector<uint8_t> compressImage(const T *rgb, uint32_t width, uint32_t height, uint8_t channels)
+    std::vector<uint64_t> compressImage(const T *rgb, uint32_t width, uint32_t height, uint8_t channels)
     {
         auto planar = split_rgb_into_planar<src_depth, dest_depth>(rgb, channels, width, height);
         auto out = std::vector(planar.size(), std::vector(0, uint8_t{}));
         constexpr uint8_t channels_depth = dest_depth;
-        std::vector<std::future<std::vector<uint8_t>>> futures;
+        std::vector<std::future<std::vector<uint64_t>>> futures;
         futures.reserve(channels);
         #ifdef NDEBUG
         bool one_thread = false;
@@ -391,6 +382,7 @@ void join_planar_into_rgb(const std::vector<std::vector<S>> & channels, uint32_t
         }
 
         Header hdr{0, width, height, uint16_t(1 << 15), channels, channels_depth };
+        static_assert(sizeof(Header) == 16, "Header size must be 16 bytes");
         if ( std::is_same_v<T, uint8_t> && channels_depth > 8 ) {
             throw std::invalid_argument("std::is_same_v<T, uint8_t> && channels_depth > 8");
         }
@@ -401,40 +393,45 @@ void join_planar_into_rgb(const std::vector<std::vector<S>> & channels, uint32_t
             throw std::invalid_argument("std::is_same_v<T, uint32_t> && channels_depth <= 16");
         }
         hdr.protect();
-        std::vector<uint8_t> hdr_and_channels;
-        hdr_and_channels.reserve(sizeof(hdr) + width * height * channels * 3 / 4);
-        auto bi = std::back_inserter(hdr_and_channels);
-        std::copy(reinterpret_cast<const uint8_t *>(&hdr), reinterpret_cast<const uint8_t *>(&hdr) + sizeof(hdr), bi);
-
+        std::vector<std::vector<uint64_t>> channels_bitstreams(futures.size());
+        //hdr_and_channels.reserve(sizeof(hdr) + width * height * channels * 3 / 4);
+        //auto bi = std::back_inserter(hdr_and_channels);
+        //std::copy(reinterpret_cast<const uint8_t *>(&hdr), reinterpret_cast<const uint8_t *>(&hdr) + sizeof(hdr), bi);
+       
+        size_t total_blocks = 2 + futures.size();
         for (size_t i = 0; i < futures.size(); ++i)
         {
-            auto vec = futures[i].get();
-            size_t vec_size = vec.size();
-            std::copy(reinterpret_cast<const uint8_t *>(&vec_size), reinterpret_cast<const uint8_t *>(&vec_size) + sizeof(vec_size), bi);
-            std::copy(vec.begin(), vec.end(), bi);
+            channels_bitstreams[i] = futures[i].get();
+            total_blocks += channels_bitstreams[i].size();
+        }
+        std::vector<uint64_t> hdr_and_channels(total_blocks);
+        std::memcpy(hdr_and_channels.data(), &hdr, sizeof(hdr));
+        size_t offset = 2;
+        for (auto& v : channels_bitstreams) {
+            hdr_and_channels[offset++] = v.size();
+            std::copy(v.begin(), v.end(), hdr_and_channels.begin() + offset);
+            offset += v.size();
         }
         return hdr_and_channels;
     }
 
 
     template <typename DestType>
-    auto decompressImageAfterHeaderAsPlanar(const Header &hdr, const uint8_t *begin, const uint8_t *end)
+    auto decompressImageAfterHeaderAsPlanar(const Header &hdr, const uint64_t *begin, const uint64_t *end)
     {
         std::vector<std::vector<DestType>> planar(hdr.channel_nb, std::vector<DestType>(hdr.width * hdr.height));
         std::vector<std::future<bool>> futures;
         futures.reserve(hdr.channel_nb);
         for (size_t i = 0; i < planar.size(); ++i)
         {
-            size_t size;
             #ifdef NDEBUG
             bool one_thread = false;
             #else
             bool one_thread = true;
             #endif
-            std::copy(begin, begin + sizeof(size), reinterpret_cast<uint8_t *>(&size));
-            begin += sizeof(size);
+            size_t size = *begin++;
             futures.push_back(
-                std::async( i==0 || one_thread ? std::launch::deferred : std::launch::async, [&](const uint8_t *begin, const uint8_t *end, DestType *pixels)
+                std::async( i==0 || one_thread ? std::launch::deferred : std::launch::async, [&](const uint64_t *begin, const uint64_t *end, DestType *pixels)
                            {
                                decodeChannel(hdr.width, hdr.height, begin, end, pixels);
                                return true;
@@ -451,11 +448,11 @@ void join_planar_into_rgb(const std::vector<std::vector<S>> & channels, uint32_t
 
 
 
-    RawImage decompressImage(const uint8_t *begin, const uint8_t *end)
+    RawImage decompressImage(const uint64_t *begin, const uint64_t *end)
     {
         Header hdr{};
-        std::copy(begin, begin + sizeof(hdr), reinterpret_cast<uint8_t *>(&hdr));
-        begin += sizeof(hdr);
+        std::memcpy(&hdr, begin, sizeof(hdr));
+        begin += 2;
         if (!hdr.check()) {
             throw std::runtime_error("invalid format");
         }

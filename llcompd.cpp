@@ -21,7 +21,10 @@ int main(int argc, char** argv) {
         std::cerr << "Error opening input file: " << filename << std::endl;
         return 1;
     }
-    std::vector<uint8_t> compressed((std::istreambuf_iterator<char>(inFile)), std::istreambuf_iterator<char>());
+    size_t size = inFile.seekg(0, std::ios::end).tellg() / sizeof(uint64_t);
+    inFile.seekg(0, std::ios::beg);
+    std::vector<uint64_t> compressed(size);
+    inFile.read(reinterpret_cast<char*>(compressed.data()), size * sizeof(uint64_t));
     inFile.close();
     try {
         auto rawImage = llcomp::decompressImage(compressed.data(), compressed.data()+compressed.size() );
