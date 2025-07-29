@@ -27,7 +27,7 @@
 namespace llcomp
 {
     constexpr inline auto ext = ".llr";
-    constexpr inline uint8_t rev = '0';
+    constexpr inline uint8_t rev = '1';
     constexpr inline uint32_t signature = 'l' | 'l' << 8U | 'r' << 16U | rev << 24U;
 
     inline int median(int a, int b, int c)
@@ -255,7 +255,7 @@ void join_planar_into_rgb(const std::vector<std::vector<S>> & channels, uint32_t
                 throw std::runtime_error("Failed to open file for reading");
             }
             if (get_next_line(in) != "P6")
-                throw std::invalid_argument("Invalid PGM format\nuse: ffmpeg -i input.png -pix_fmt rgb48 output.ppm");
+                throw std::invalid_argument("Invalid PPM format\nuse: ffmpeg -i input.png -pix_fmt rgb48 output.ppm");
 
             std::istringstream pgm_width_height_is(get_next_line(in,true));
             std::istringstream pgm_bits_per_channel_is(get_next_line(in));
