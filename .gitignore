@@ -2,9 +2,8 @@
 *
 !.gitignore
 # Allow only repository files
-!llcomp*.*
-!rlgr.hpp
-!bitstream.hpp
 !CMakeLists.txt
-!README.md
 !LICENSE
+!*.hpp
+!*.cpp
+!*.md
