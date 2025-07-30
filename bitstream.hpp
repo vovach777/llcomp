@@ -90,7 +90,7 @@ struct Reader
 
         while (n > 0) {
             if (bits_valid_64 == 0) {
-                buf64 = refill();
+                buf64 = bswap64(refill());
                 bits_valid_64 = 64;
             }
             uint32_t take = std::min(n, bits_valid_64);
@@ -102,7 +102,7 @@ struct Reader
     }
     inline void init()
     {
-            buf64 = refill();
+            buf64 = bswap64( refill() );
             buf32 = static_cast<uint32_t>(buf64 >> 32);
             buf64 <<= 32;
             bits_valid_64 = 32;
@@ -123,51 +123,3 @@ struct Reader
 
 }
 
-
-namespace Rice
-{
-
-    inline uint32_t to_unsigned(int32_t v)
-    {
-        return (v << 1) ^ (v >> 31);
-    }
-
-    inline int32_t to_signed(uint32_t uv)
-    {
-        return (uv >> 1) ^ -static_cast<int32_t>(uv & 1);
-    }
-
-    // Rice code: Encode unsigned integer x with parameter m
-    template <typename Writer>
-    void write(uint32_t x, uint32_t m, Writer &&writer)
-    {
-        auto quotient = x >> m; // Math.floor(x / (1 << m))
-        auto remainder = x & ((1 << m) - 1);
-        while (quotient >= 32)
-        {
-            writer.put_bits(32,0xffffffffu);
-            quotient -= 32;
-        }
-        writer.put_bits(quotient + 1, ((1ULL << (quotient))-1) << 1); // Write quotient bits
-        writer.put_bits(m, remainder);
-    }
-    template <typename Reader>
-    uint32_t read(uint32_t m, Reader&& reader)
-    {
-        uint32_t quotient = 0;
-        while (reader.peek32() == 0xffffffffu)
-        {
-            quotient += 32;
-            reader.skip(32);
-        }
-        auto ones_in_buffer = __builtin_clz(~reader.peek32());
-        reader.skip(ones_in_buffer + 1);
-        quotient += ones_in_buffer;
-        if (m) {
-            auto remainder = reader.peek32() >> (32 - m);
-            reader.skip(m);
-            return remainder + (quotient << m);
-        }
-        return quotient;
-    }
-}
