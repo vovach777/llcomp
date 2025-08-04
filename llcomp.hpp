@@ -26,7 +26,7 @@
 namespace llcomp
 {
     constexpr inline auto ext = ".llr";
-    constexpr inline uint8_t rev = '0';
+    constexpr inline uint8_t rev = '1';
     constexpr inline uint32_t signature = 'l' | 'l' << 8U | 'r' << 16U | rev << 24U;
 
     inline int median(int a, int b, int c)
@@ -34,153 +34,132 @@ namespace llcomp
         return a + b + c - std::max({a, b, c}) - std::min({a, b, c});
     }
 
-
-    template <int src_depth, int dest_depth, typename T>
-    auto split_rgb_into_planar(const T* data, int channels, int width, int height)
+    struct Header
     {
-        using DestType = std::conditional_t<(dest_depth > 15), int32_t, int16_t>;
+        uint32_t hdr_crc;
+        uint32_t width;         // same for all channels
+        uint32_t height;        // same for all channels
+        uint16_t flags;          // 15: is rgb (first 3 channels is red, green, blue channels
+        uint8_t  channel_nb;    // r,g,b,n1,n2,n3,n4...
+        uint8_t  channels_depth; // 8-16 supported: 8-15 -> int16_t arithmetic coding, 16 -> int32_t arithmetic coding, >16 is not tested
+        void protect() {
+            hdr_crc = _mm_crc32_u32(signature,width);
+            hdr_crc = _mm_crc32_u32(hdr_crc, height);
+            hdr_crc = _mm_crc32_u16(hdr_crc, flags);
+            hdr_crc = _mm_crc32_u8(hdr_crc, channel_nb);
+            hdr_crc = _mm_crc32_u8(hdr_crc, channels_depth);
+        }
+        bool check()  {
+            auto crc = _mm_crc32_u32(signature,width);
+            crc = _mm_crc32_u32(crc, height);
+            crc = _mm_crc32_u16(crc, flags);
+            crc = _mm_crc32_u8(crc, channel_nb);
+            crc = _mm_crc32_u8(crc, channels_depth);
+            return crc == hdr_crc;
+        }
+    };
 
-        auto res = std::vector<std::vector<DestType>>(channels, std::vector<DestType>(width * height));
-        size_t pos{0};
-        constexpr int max_src_value = (1 << src_depth) - 1;
 
-        for (int h = 0; h < height; ++h) {
-            for (int w = 0; w < width; ++w) {
-                if (channels >= 3) {
-                    int r = data[0];
-                    int g = data[1];
-                    int b = data[2];
+    template <typename RGBLoader>
+    auto rlgr_encode(const Header& hdr, RGBLoader && rgbloader)
+    {
+        const auto width = hdr.width;
+        const auto height = hdr.height;
+        std::vector<std::vector<std::vector<int>>> line(2, std::vector<std::vector<int>>(3, std::vector<int>(width, 0)));
 
-                    if (r > max_src_value || g > max_src_value || b > max_src_value) {
-                        throw std::invalid_argument("wrong source depth!");
-                    }
+        std::vector<uint64_t> out_vec;
+        out_vec.reserve(hdr.width*hdr.height*3/2);
+        out_vec.resize(2);
+        std::memcpy(out_vec.data(), &hdr, sizeof(Header));
 
-                    if constexpr (dest_depth < src_depth) {
-                        int shift = src_depth - dest_depth;
-                        r >>= shift;
-                        g >>= shift;
-                        b >>= shift;
-                    }
+        size_t pos[3];
+        auto load_next= [&]() {
+            out_vec.push_back(0);
+            return out_vec.size()-1;
+        };
+        auto flusher = [&](uint64_t v, int tag)
+        {
+            out_vec[ pos[tag] ] = v;
+            pos[tag] = load_next();
+        };
+        using Stream = BitStream::Writer<decltype(flusher), int>;
+        std::vector<RLGR::Encoder<Stream>> encoders;
+        encoders.reserve(3);
+
+        for (int i = 0; i < 3; ++i) {
+            pos[i] = load_next();
+            encoders.emplace_back(Stream(flusher, i));
+        }
+        // uint16_t Rshift = std::max(0, hdr.channels_depth - 8);
+        // uint16_t Rmask = (1 << Rshift) - 1;
+        uint16_t Rshift = 0;
+        uint16_t Rmask = 0;
+
+        for (uint32_t h = 0; h < height; ++h) {
+            for (uint32_t w = 0; w < width; ++w) {
+                    auto urgb = rgbloader();
+                    auto& r = line[h & 1][0][w];
+                    auto& g = line[h & 1][1][w];
+                    auto& b = line[h & 1][2][w];
+
+                    r = urgb[0] >> Rshift;
+                    g = urgb[1] >> Rshift;
+                    b = urgb[2] >> Rshift;
 
                     b -= g;
                     r -= g;
                     g += (b + r) / 4;
 
-                    res[0][pos] = static_cast<DestType>(r);
-                    res[1][pos] = static_cast<DestType>(g);
-                    res[2][pos] = static_cast<DestType>(b);
-
-                    for (int i = 3; i < channels; i++) {
-                        res[i][pos] = static_cast<DestType>(data[i]);
+                    for (int i = 0; i < 3; ++i) {
+                        const int l = w > 0 ? line[h & 1][i][w - 1] : h > 0 ? line[(h - 1) & 1][i][w] : 0;
+                        const int t = h > 0 ? line[(h-1)&1][i][w] : l;
+                        const int tl = h > 0 && w > 0 ? line[(h-1)&1][i][w-1] : t;
+                        const int predict = median(l, l + t - tl, t);
+                        encoders[i].encode(static_cast<int>(line[h&1][i][w]) - predict);
+                        if (Rshift) {
+                            encoders[i].bitwriter.put_bits(Rshift, urgb[i] & Rmask);
+                        }
                     }
-                } else {
-                    for (int i = 0; i < channels; i++) {
-                        res[i][pos] = static_cast<DestType>(data[i]);
-                    }
-                }
-
-                data += channels;
-                pos += 1;
             }
         }
-
-        return res;
-    }
-
-
-template <typename S, typename T>
-void join_planar_into_rgb(const std::vector<std::vector<S>> & channels, uint32_t width, uint32_t height, T* dest) {
-
-    size_t pos = 0;
-    for (uint32_t h=0; h < height; ++h)
-    {
-        for (uint32_t w=0; w < width; ++w)
-        {
-            if (channels.size() >= 3) {
-                int r = channels[0][pos];
-                int g = channels[1][pos];
-                int b = channels[2][pos];
-                g -= ((r + b) / 4);
-                r += g;
-                b += g;
-                dest[0] = std::clamp<int32_t>(r,  std::numeric_limits<T>::min(), std::numeric_limits<T>::max());
-                dest[1] = std::clamp<int32_t>(g,  std::numeric_limits<T>::min(), std::numeric_limits<T>::max());
-                dest[2] = std::clamp<int32_t>(b,  std::numeric_limits<T>::min(), std::numeric_limits<T>::max());
-            }
-            for (size_t n=3; n < channels.size(); ++n) {
-                dest[n] = std::clamp<int32_t>(channels[n][pos],  std::numeric_limits<T>::min(), std::numeric_limits<T>::max());
-            }
-            dest += channels.size();
-            pos++;
+        for (int i = 0; i < 3; ++i) {
+            encoders[i].flush();
         }
-    }
-}
-
-    template <typename T>
-    inline auto encodeChannel(const T*data, uint32_t width, uint32_t height)
-    {
-        auto size = size_t(width) * height;
-        std::vector<uint64_t> buffer;
-        buffer.reserve((size + 15)/ 16);
-        auto bi = std::back_inserter(buffer);
-        BitStream::Writer bit_stream{[&](uint64_t data)
-                                     {
-                                        *bi = data;
-                                     }};
-
-        RLGR::Encoder encoder{[&](uint32_t n, uint32_t val)
-                              { bit_stream.put_bits(n, val); }};
-        for (uint32_t h = 0; h < height; ++h)
-        {
-            for (uint32_t w = 0; w < width; ++w)
-            {
-                const int l = w > 0 ? data[-1] : h > 0 ? data[-ptrdiff_t(width)]
-                                                       : 0;
-                const int t = h > 0 ? data[-ptrdiff_t(width)] : l;
-                const int tl = h > 0 && w > 0 ? data[-ptrdiff_t(width) - 1] : t;
-                const int predict = median(l, l + t - tl, t);
-                int diff = (static_cast<int>(data[0]) - predict);
-                encoder.encode(diff);
-                data++;
-            }
-        }
-        encoder.encode(-1);
-        bit_stream.flush();
-        return buffer;
+        return out_vec;
     }
 
-    template<typename F>
-    class Defer {
-        F func;
-    public:
-        Defer(F&& f) : func(std::forward<F>(f)) {}
-        ~Defer() { func(); }
-    };
-
-    template<typename F>
-    Defer<F> make_defer(F&& f) {
-        return Defer<F>(std::forward<F>(f));
-    }
 
     struct RawImage
     {
-        std::unique_ptr<uint8_t[]> data{};
+        private:
+        std::unique_ptr<uint16_t[]> data{};
+        public:
         uint32_t width{};
         uint32_t height{};
         uint32_t channel_nb{};
         uint8_t bits_per_channel{};
-        enum class ChannelType{ none, uint8, uint16, uint16be, int32 };
+        enum class ChannelType{ none, uint8, uint16, uint16be };
         ChannelType channel_type{ ChannelType::none };
+
+        void allocate() {
+            if (channel_type != ChannelType::none) {
+                size_t size = width * height * channel_nb;
+
+                if ( channel_type == ChannelType::uint8 )
+                    size = (size + 1) / 2;
+                data = std::make_unique<uint16_t[]>( size );
+            }
+        }
 
         template<typename T>
         T* as() {
-            static_assert(std::is_same_v<T, uint8_t> || std::is_same_v<T, uint16_t> || std::is_same_v<T, int32_t>,
+            static_assert(std::is_same_v<T, uint8_t> || std::is_same_v<T, uint16_t>,
                 "Unsupported type in RawImage::as()");
             return reinterpret_cast<T*>(data.get());
         }
         template<typename T>
         const T* as() const {
-            static_assert(std::is_same_v<T, uint8_t> || std::is_same_v<T, uint16_t> || std::is_same_v<T, int32_t>,
+            static_assert(std::is_same_v<T, uint8_t> || std::is_same_v<T, uint16_t>,
                 "Unsupported type in RawImage::as()");
             return reinterpret_cast<const T*>(data.get());
         }
@@ -246,14 +225,13 @@ void join_planar_into_rgb(const std::vector<std::vector<S>> & channels, uint32_t
             if (width == 0 || height == 0 || bits_per_channel == 0 || bits_per_channel > 16 )
                 throw std::invalid_argument("Invalid PPM format");
             auto size = size_t(width) * height * channel_nb * (bits_per_channel > 8 ? 2 : 1);
-            data = std::make_unique<uint8_t[]>(size);
-            in.read(reinterpret_cast<char*>(data.get()),size);
             if (bits_per_channel > 8) {
                 channel_type = ChannelType::uint16be;
             } else {
                 channel_type = ChannelType::uint8;
             }
-
+            allocate();
+            in.read(reinterpret_cast<char*>(data.get()),size);
         }
         inline void save( const std::string& filename ) {
             using ChannelType = llcomp::RawImage::ChannelType;
@@ -291,205 +269,100 @@ void join_planar_into_rgb(const std::vector<std::vector<S>> & channels, uint32_t
 
     };
 
-    template <typename T>
-    inline void decodeChannel(uint32_t width, uint32_t height, const uint64_t *data_begin, const uint64_t *data_end, T *pixels)
+    inline auto rlgr_decode(const uint64_t *data_begin, const uint64_t *data_end)
     {
         size_t rgb_pos = 0;
-        auto data = data_begin;
+        Header hdr;
+        RawImage img;
+        std::memcpy(&hdr, data_begin, sizeof(Header));
+        auto it = data_begin+2;
+        img.width = hdr.width;
+        img.height = hdr.height;
+        img.channel_nb = 3;
+        img.bits_per_channel = hdr.channels_depth;
+        img.channel_type = hdr.channels_depth <= 8 ? RawImage::ChannelType::uint8 : RawImage::ChannelType::uint16;
+        img.allocate();
+        auto width = img.width;
+        auto height = img.height;
+        auto featcher = [&](int tag) {
+            if ( it >= data_end ) return 0x55555555AAAAAAAAull;
+            return uint64_t{ *it++ };
+        };
+        using Stream = BitStream::Reader<decltype(featcher), int>;
+        std::vector<RLGR::Decoder<Stream>> decoders;
+        decoders.reserve(3);
 
+        for (int i = 0; i < 3; ++i) {
 
-        BitStream::Reader bit_stream{[&]()
-                                    {
-                                        return data < data_end ? *data++ : 0x55555555ull;   
-                                    }};
-
-        bit_stream.init();
-
-        RLGR::Decoder decoder{[&]
-                              { return bit_stream.peek32(); }, [&](uint32_t n)
-                              { return bit_stream.skip(n); }};
-
-        auto [next, ziros] = decoder.decode();
+            auto& decoder = decoders.emplace_back(Stream(featcher, i));
+            decoder.init();
+        }
+        uint8_t* pixels = img.as<uint8_t>();
+        uint16_t* pixels16 = img.as<uint16_t>();
+        bool is_16bit = img.bits_per_channel > 8;
+        int clamp = (1 << img.bits_per_channel)-1;
+        std::vector<std::vector<std::vector<int>>> line(2, std::vector<std::vector<int>>(3, std::vector<int>(width, 0)));
         for (uint32_t h = 0; h < height; ++h)
         {
             for (uint32_t w = 0; w < width; ++w)
             {
-                const int l = w > 0 ? pixels[-1] : (h > 0 ? pixels[-static_cast<ptrdiff_t>(width)] : 0);
-                const int t = h > 0 ? pixels[-static_cast<ptrdiff_t>(width)] : l;
-                const int tl = h > 0 && w > 0 ? pixels[-static_cast<ptrdiff_t>(width) - 1] : t;
-                const int predict = median(l, l + t - tl, t);
-
-                int pixel = predict + (ziros == 0 ? next : 0);
-                if constexpr (std::is_same_v<T, int32_t> == false ) {
-                    if (pixel < std::numeric_limits<T>::min() || pixel > std::numeric_limits<T>::max()) {
-                        throw std::runtime_error( "Pixel value out of range");
-                    }
+                for (int i = 0; i < 3; ++i) {
+                    const int l = w > 0 ? line[h & 1][i][w - 1] : h > 0 ? line[(h - 1) & 1][i][w] : 0;
+                    const int t = h > 0 ? line[(h-1)&1][i][w] : l;
+                    const int tl = h > 0 && w > 0 ? line[(h-1)&1][i][w-1] : t;
+                    line[h & 1][i][w] = decoders[i].decode_rle() + median(l, l + t - tl, t);
                 }
-                *pixels++ = pixel;
-
-                if (ziros == 0)
-                    std::tie(next, ziros) = decoder.decode();
-                else
-                    ziros--;
+                int r = line[h & 1][0][w];
+                int g = line[h & 1][1][w];
+                int b = line[h & 1][2][w];
+                g -= ((r + b) / 4);
+                r += g;
+                b += g;
+                if (is_16bit) {
+                    pixels16[0] = std::clamp( r, 0, clamp);
+                    pixels16[1] = std::clamp( g, 0, clamp);
+                    pixels16[2] = std::clamp( b, 0, clamp);
+                    pixels16 += 3;
+                } else {
+                    pixels[0] = std::clamp( r, 0, clamp);
+                    pixels[1] = std::clamp( g, 0, clamp);
+                    pixels[2] = std::clamp( b, 0, clamp);
+                    pixels += 3;
+                }
             }
         }
-    }
-
-    struct Header
-    {
-        uint32_t hdr_crc;
-        uint32_t width;         // same for all channels
-        uint32_t height;        // same for all channels
-        uint16_t flags;          // 15: is rgb (first 3 channels is red, green, blue channels
-        uint8_t  channel_nb;    // r,g,b,n1,n2,n3,n4...
-        uint8_t  channels_depth; // 8-16 supported: 8-15 -> int16_t arithmetic coding, 16 -> int32_t arithmetic coding, >16 is not tested
-        void protect() {
-            hdr_crc = _mm_crc32_u32(signature,width);
-            hdr_crc = _mm_crc32_u32(hdr_crc, height);
-            hdr_crc = _mm_crc32_u16(hdr_crc, flags);
-            hdr_crc = _mm_crc32_u8(hdr_crc, channel_nb);
-            hdr_crc = _mm_crc32_u8(hdr_crc, channels_depth);
-        }
-        bool check()  {
-            auto crc = _mm_crc32_u32(signature,width);
-            crc = _mm_crc32_u32(crc, height);
-            crc = _mm_crc32_u16(crc, flags);
-            crc = _mm_crc32_u8(crc, channel_nb);
-            crc = _mm_crc32_u8(crc, channels_depth);
-            return crc == hdr_crc;
-        }
-    };
-
-    template <int src_depth, int dest_depth, typename T>
-    std::vector<uint64_t> compressImage(const T *rgb, uint32_t width, uint32_t height, uint8_t channels)
-    {
-        auto planar = split_rgb_into_planar<src_depth, dest_depth>(rgb, channels, width, height);
-        auto out = std::vector(planar.size(), std::vector(0, uint8_t{}));
-        constexpr uint8_t channels_depth = dest_depth;
-        std::vector<std::future<std::vector<uint64_t>>> futures;
-        futures.reserve(channels);
-        #ifdef NDEBUG
-        bool one_thread = false;
-        #else
-        bool one_thread = true;
-        #endif
-
-        for (size_t i = 0; i < out.size(); ++i)
-        {
-            futures.push_back(
-                std::async(i==0 || one_thread ? std::launch::deferred : std::launch::async, [&](size_t n)
-                           { return encodeChannel(planar[n].data(), width, height); }, i));
-        }
-
-        Header hdr{0, width, height, uint16_t(1 << 15), channels, channels_depth };
-        static_assert(sizeof(Header) == 16, "Header size must be 16 bytes");
-        if ( std::is_same_v<T, uint8_t> && channels_depth > 8 ) {
-            throw std::invalid_argument("std::is_same_v<T, uint8_t> && channels_depth > 8");
-        }
-        if ( std::is_same_v<T, uint16_t> && channels_depth <= 8) {
-            throw std::invalid_argument("std::is_same_v<T, uint16_t> && channels_depth <= 8");
-        }
-        if ( std::is_same_v<T, uint32_t> && channels_depth <= 16) {
-            throw std::invalid_argument("std::is_same_v<T, uint32_t> && channels_depth <= 16");
-        }
-        hdr.protect();
-        std::vector<std::vector<uint64_t>> channels_bitstreams(futures.size());
-        //hdr_and_channels.reserve(sizeof(hdr) + width * height * channels * 3 / 4);
-        //auto bi = std::back_inserter(hdr_and_channels);
-        //std::copy(reinterpret_cast<const uint8_t *>(&hdr), reinterpret_cast<const uint8_t *>(&hdr) + sizeof(hdr), bi);
-       
-        size_t total_blocks = 2 + futures.size();
-        for (size_t i = 0; i < futures.size(); ++i)
-        {
-            channels_bitstreams[i] = futures[i].get();
-            total_blocks += channels_bitstreams[i].size();
-        }
-        std::vector<uint64_t> hdr_and_channels(total_blocks);
-        std::memcpy(hdr_and_channels.data(), &hdr, sizeof(hdr));
-        size_t offset = 2;
-        for (auto& v : channels_bitstreams) {
-            hdr_and_channels[offset++] = v.size();
-            std::copy(v.begin(), v.end(), hdr_and_channels.begin() + offset);
-            offset += v.size();
-        }
-        return hdr_and_channels;
+        return img;
     }
 
 
-    template <typename DestType>
-    auto decompressImageAfterHeaderAsPlanar(const Header &hdr, const uint64_t *begin, const uint64_t *end)
-    {
-        std::vector<std::vector<DestType>> planar(hdr.channel_nb, std::vector<DestType>(hdr.width * hdr.height));
-        std::vector<std::future<bool>> futures;
-        futures.reserve(hdr.channel_nb);
-        for (size_t i = 0; i < planar.size(); ++i)
-        {
-            #ifdef NDEBUG
-            bool one_thread = false;
-            #else
-            bool one_thread = true;
-            #endif
-            size_t size = *begin++;
-            futures.push_back(
-                std::async( i==0 || one_thread ? std::launch::deferred : std::launch::async, [&](const uint64_t *begin, const uint64_t *end, DestType *pixels)
-                           {
-                               decodeChannel(hdr.width, hdr.height, begin, end, pixels);
-                               return true;
-                           },
-                           begin, begin + size, planar[i].data()));
-            begin += size;
-        };
-        for (auto &future : futures)
-            future.get();
 
-        return planar;
+    auto compressImage(const RawImage& img)
+    {
+        Header hdr{0, img.width, img.height, uint16_t(1 << 15), img.channel_nb, img.bits_per_channel };
+        if ( img.channel_type == RawImage::ChannelType::uint16 ) {
+            auto pixels = img.as<uint16_t>();
+            return rlgr_encode(hdr, [&]()
+            {
+                pixels += 3;
+                return std::array<std::uint16_t,3>{ pixels[-3], pixels[-2], pixels[-1] };
+            });
+        } else
+        if ( img.channel_type == RawImage::ChannelType::uint8 ) {
+            auto pixels = img.as<uint8_t>();
+            return rlgr_encode(hdr, [&]()
+            {
+                pixels += 3;
+                return std::array<std::uint16_t,3>{ uint16_t(pixels[-3]), uint16_t(pixels[-2]), uint16_t(pixels[-1]) };
+            });
+        }
+        throw std::runtime_error("Unsupported channel type");
+
 
     }
-
-
 
     RawImage decompressImage(const uint64_t *begin, const uint64_t *end)
     {
-        Header hdr{};
-        std::memcpy(&hdr, begin, sizeof(hdr));
-        begin += 2;
-        if (!hdr.check()) {
-            throw std::runtime_error("invalid format");
-        }
-
-        if (hdr.channels_depth <= 8) {
-            auto planar = decompressImageAfterHeaderAsPlanar<int16_t>(hdr,begin,end);
-            RawImage rawImage{
-                std::make_unique<uint8_t[]>(hdr.width * hdr.height * hdr.channel_nb),
-                hdr.width, hdr.height, hdr.channel_nb, hdr.channels_depth, RawImage::ChannelType::uint8};
-
-            join_planar_into_rgb(planar,hdr.width,hdr.height,rawImage.as<uint8_t>());
-            return rawImage;
-        } else
-        if (hdr.channels_depth < 16) {
-            auto planar = decompressImageAfterHeaderAsPlanar<int16_t>(hdr,begin,end);
-            RawImage rawImage{
-                std::make_unique<uint8_t[]>(hdr.width * hdr.height * hdr.channel_nb * sizeof(uint16_t)),
-                hdr.width, hdr.height, hdr.channel_nb, hdr.channels_depth, RawImage::ChannelType::uint16};
-
-            join_planar_into_rgb(planar,hdr.width,hdr.height,rawImage.as<uint16_t>());
-            return rawImage;
-        } else
-        if (hdr.channels_depth == 16) {
-            auto planar = decompressImageAfterHeaderAsPlanar<int32_t>(hdr,begin,end);
-            RawImage rawImage{
-                std::make_unique<uint8_t[]>(hdr.width * hdr.height * hdr.channel_nb * sizeof(uint16_t)),
-                hdr.width, hdr.height, hdr.channel_nb, hdr.channels_depth, RawImage::ChannelType::uint16};
-            join_planar_into_rgb(planar,hdr.width,hdr.height,rawImage.as<uint16_t>());
-            return rawImage;
-        } else {
-            auto planar = decompressImageAfterHeaderAsPlanar<int32_t>(hdr,begin,end);
-            RawImage rawImage{
-                std::make_unique<uint8_t[]>(hdr.width * hdr.height * hdr.channel_nb * sizeof(int32_t)),
-                hdr.width, hdr.height, hdr.channel_nb, hdr.channels_depth, RawImage::ChannelType::int32};
-            join_planar_into_rgb(planar,hdr.width,hdr.height,rawImage.as<int32_t>());
-            return rawImage;
-        }
+        return rlgr_decode(begin,end);
     }
 
 }

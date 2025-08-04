@@ -64,16 +64,19 @@ namespace RLGR
 		return (x) ? __builtin_clz(x) : 32;
 	}
 
-	template <typename Peek32, typename Skip32>
+	template <typename BitReader>
 	struct Decoder
 	{
-		Peek32 peek32;
-		Skip32 skip32;
+		BitReader bitreader;
 		uint32_t k = 1;
 		uint32_t kp = 1 << LSGR;
 		uint32_t kr = 1;
 		uint32_t krp = 1 << LSGR;
-		Decoder(Peek32 peek32, Skip32 skip32) : peek32(peek32), skip32(skip32) {}
+		Decoder(BitReader bitreader) : bitreader(bitreader) {}
+
+		void init() {
+			bitreader.init();
+		}
 
 		std::pair<int, size_t> decode()
 		{
@@ -90,18 +93,18 @@ namespace RLGR
 
 				/* count number of leading 0s */
 
-				cnt = lzcnt_s(peek32());
+				cnt = lzcnt_s(bitreader.peek32());
 
 				vk = (cnt);
 
 				while (cnt == 32)
 				{
-					skip32(32);
-					cnt = lzcnt_s(peek32());
+					bitreader.skip(32);
+					cnt = lzcnt_s(bitreader.peek32());
 					vk += cnt;
 				}
 
-				skip32((vk % 32) + 1);
+				bitreader.skip((vk % 32) + 1);
 
 				while (vk--)
 				{
@@ -120,37 +123,37 @@ namespace RLGR
 
 				/* next k bits contain run length remainder */
 
-				run += peek32() >> (32 - k);
-				skip32(k);
+				run += bitreader.peek32() >> (32 - k);
+				bitreader.skip(k);
 
 				/* read sign bit */
 
-				int sign = (peek32() & 0x80000000U) ? 1 : 0;
-				skip32(1);
+				int sign = (bitreader.peek32() & 0x80000000U) ? 1 : 0;
+				bitreader.skip(1);
 
 				/* count number of leading 1s */
 
-				cnt = lzcnt_s(~peek32());
+				cnt = lzcnt_s(~bitreader.peek32());
 
 				vk = cnt;
 
 				while (cnt == 32)
 				{
-					skip32(32);
+					bitreader.skip(32);
 
-					cnt = lzcnt_s(~(peek32()));
+					cnt = lzcnt_s(~(bitreader.peek32()));
 
 					vk += cnt;
 				}
 
-				skip32((vk % 32) + 1);
+				bitreader.skip((vk % 32) + 1);
 
 				/* next kr bits contain code remainder */
 
 				if (kr > 0)
 				{
-					code = (peek32() >> (32 - kr));
-					skip32(kr);
+					code = (bitreader.peek32() >> (32 - kr));
+					bitreader.skip(kr);
 				}
 
 				/* add (vk << kr) to code */
@@ -206,25 +209,25 @@ namespace RLGR
 
 				/* count number of leading 1s */
 
-				cnt = lzcnt_s(~(peek32()));
+				cnt = lzcnt_s(~(bitreader.peek32()));
 				vk = cnt;
 
 				while (cnt == 32)
 				{
-					skip32(32);
-					cnt = lzcnt_s(~(peek32()));
+					bitreader.skip(32);
+					cnt = lzcnt_s(~(bitreader.peek32()));
 					vk += cnt;
 				}
 
-				skip32((vk % 32) + 1);
+				bitreader.skip((vk % 32) + 1);
 
 				/* next kr bits contain code remainder */
 
 				if (kr > 0)
 				{
-					code = (peek32() >> (32 - kr));
+					code = (bitreader.peek32() >> (32 - kr));
 				}
-				skip32(kr);
+				bitreader.skip(kr);
 
 				/* add (vk << kr) to code */
 
@@ -292,19 +295,28 @@ namespace RLGR
 				return {mag, size_t{0}};
 			}
 		}
+		std::pair<int, size_t> rle_state{0, size_t{-1}};
+		int decode_rle() {
+			if (rle_state.second == size_t{-1}) {
+				rle_state = decode();
+			}
+			int res = (rle_state.second == 0 ? rle_state.first : 0);
+			rle_state.second -= 1;
+			return res;
+		}
 	};
 
-	template <typename OutputBits>
+	template <typename BitWriter>
 	struct Encoder
 	{
 		/* Emit bitPattern to the output bitstream */
-		OutputBits outputBits;
+		BitWriter bitwriter;
 		uint32_t k = 1;
 		uint32_t kp = 1 << LSGR;
 		uint32_t krp = 1 << LSGR;
 		size_t numZeros{0};
 
-		Encoder(OutputBits outputBits) : outputBits(outputBits) {}
+		Encoder(BitWriter bitwriter) : bitwriter(bitwriter) {}
 
 		/* Converts the input value to (2 * abs(input) - sign(input)), where sign(input) = (input < 0 ? 1 :
 		 * 0) and returns it */
@@ -329,15 +341,15 @@ namespace RLGR
 			auto quotient = vk;
 			while (quotient >= 32)
 			{
-				outputBits(32, 0xffffffffu);
+				bitwriter.put_bits(32, 0xffffffffu);
 				quotient -= 32;
 			}
-			outputBits(quotient + 1, ((1ULL << (quotient)) - 1) << 1); // Write quotient bits
+			bitwriter.put_bits(quotient + 1, ((1ULL << (quotient)) - 1) << 1); // Write quotient bits
 
 			/* remainder part of GR code, if needed */
 			if (kr)
 			{
-				outputBits(kr, val & ((1 << kr) - 1)); // Original: OutputBits(kr, ...) -> pattern
+				bitwriter.put_bits(kr, val & ((1 << kr) - 1)); // Original: OutputBits(kr, ...) -> pattern
 			}
 
 			/* update krp, only if it is not equal to 1 */
@@ -369,17 +381,17 @@ namespace RLGR
 				uint32_t runmax = 1 << k;
 				while (numZeros >= runmax)
 				{
-					outputBits(1, 0); /* output a zero bit */ // Original: OutputBit(bs, 1, 0) -> sequence of bits
+					bitwriter.put_bits(1, 0); /* output a zero bit */ // Original: OutputBit(bs, 1, 0) -> sequence of bits
 					numZeros -= runmax;
 					k = UpdateParam(kp, UP_GR); /* update kp, k */
 					runmax = 1 << k;
 				}
 
 				/* output a 1 to terminate runs */
-				outputBits(1, 1); // Original: OutputBit(bs, 1, 1) -> sequence of bits
+				bitwriter.put_bits(1, 1); // Original: OutputBit(bs, 1, 1) -> sequence of bits
 
 				/* output the remaining run length using k bits */
-				outputBits(k, numZeros); // Original: OutputBits(k, numZeros) -> pattern
+				bitwriter.put_bits(k, numZeros); // Original: OutputBits(k, numZeros) -> pattern
 				numZeros = 0;
 
 				/* note: when we reach here and the last byte being encoded is 0, we still
@@ -388,7 +400,7 @@ namespace RLGR
 				/* encode the nonzero value using GR coding */
 				const uint32_t mag = static_cast<uint32_t>(input < 0 ? -input : input); /* absolute value of input coefficient */
 				/* sign of input coefficient */
-				outputBits(1, (input < 0 ? 1 : 0)); /* output the sign bit */ // Original: OutputBits(1, sign) -> pattern
+				bitwriter.put_bits(1, (input < 0 ? 1 : 0)); /* output the sign bit */ // Original: OutputBits(1, sign) -> pattern
 				CodeGR(krp, mag ? mag - 1 : 0);								  /* output GR code for (mag - 1) */
 
 				k = UpdateParam(kp, -DN_GR);
@@ -413,6 +425,10 @@ namespace RLGR
 					k = UpdateParam(kp, UQ_GR);
 				}
 			}
+		}
+		void flush() {
+			encode(-1);
+			bitwriter.flush();
 		}
 	};
 

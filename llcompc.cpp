@@ -8,7 +8,7 @@
 
 int main(int argc, char** argv) {
     profiling::StopWatch execute_time;
-    execute_time.startnew();
+
     if (argc < 2) {
         std::cerr << "Usage: " << argv[0] << " <image_path>" << std::endl;
         return 1;
@@ -19,36 +19,8 @@ int main(int argc, char** argv) {
     llcomp::RawImage img;
     img.load(std::string(filename));
     img.le();
-    switch (img.bits_per_channel)
-    {
-        case 8:  {
-            compressed = llcomp::compressImage<8,8>(img.as<uint8_t>(), img.width, img.height, img.channel_nb );
-            break;
-        }
-        case 10:  {
-            compressed = llcomp::compressImage<10,10>(img.as<uint16_t>(), img.width, img.height, img.channel_nb );
-            break;
-        }
-        case 12: {
-            compressed = llcomp::compressImage<12,12>(img.as<uint16_t>(), img.width, img.height, img.channel_nb );
-            break;
-        }
-        case 14: {
-            compressed = llcomp::compressImage<14,14>(img.as<uint16_t>(), img.width, img.height, img.channel_nb );
-            break;
-        }
-        case 15: {
-            compressed = llcomp::compressImage<15,15>(img.as<uint16_t>(), img.width, img.height, img.channel_nb );
-            break;
-        }
-        case 16: {
-            compressed = llcomp::compressImage<16,16>(img.as<uint16_t>(), img.width, img.height, img.channel_nb );
-            break;
-        }
-        default: {
-            throw std::runtime_error("fail to load image: unknown bits per channal value!");
-        }
-    }
+    execute_time.startnew();
+    compressed = llcomp::compressImage(img );
 
     std::string outputFile = std::string(filename) + llcomp::ext;
     std::ofstream outFile(outputFile, std::ios::binary);

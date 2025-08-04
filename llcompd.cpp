@@ -28,6 +28,7 @@ int main(int argc, char** argv) {
     inFile.close();
     try {
         auto rawImage = llcomp::decompressImage(compressed.data(), compressed.data()+compressed.size() );
+        execute_time.stop();
         rawImage.save(std::string(filename) + ".ppm");
 
     } catch (const std::exception& e) {
@@ -37,7 +38,7 @@ int main(int argc, char** argv) {
         std::cerr << "Unknown error occurred" << std::endl;
         return 2;
     }
-    execute_time.stop();
+
     std::cout << "time: " << execute_time.elapsed_str() << std::endl;
     return 0;
 }

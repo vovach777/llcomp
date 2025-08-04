@@ -26,12 +26,13 @@ namespace BitStream {
     }
 #endif
 
-template <typename Flush>
+template <typename Flush, typename Tag>
 struct Writer {
     uint64_t buf{0};
     uint32_t left{64};
     Flush flush_f;
-    Writer(Flush flush_f) : flush_f(flush_f) {}
+    Tag tag;
+    Writer(Flush flush_f, Tag tag) : flush_f(flush_f), tag(tag) {}
 
 /**
  * Write up to 32 bits into a bitstream.
@@ -52,7 +53,7 @@ inline void put_bits(uint32_t n, uint32_t value)
         auto rem = n - left;
         buf <<= left;
         buf |= static_cast<uint64_t>(value) >> rem;
-        flush_f(bswap64(buf));
+        flush_f(bswap64(buf), tag);
         left += 64 - n;
         buf = value; //it's ok that have extra MSB rem bits.. it's cuts on flush later
     }
@@ -67,22 +68,22 @@ inline void byte_align() {
 void flush() {
     if (left < 64) {
         buf <<= left;
-        flush_f(bswap64(buf));
+        flush_f(bswap64(buf), tag);
         buf = 0;
         left = 64;
     }
 }
 
 };
-template <typename Refill>
+template <typename Refill, typename Tag>
 struct Reader
 {
-
     uint64_t buf64{0}; // stores bits read from the buffer
     uint32_t buf32{0};
     uint32_t bits_valid_64{0}; // number of bits left in bits field
     Refill refill;
-    Reader(Refill refill) : refill(refill) {}
+    Tag tag;
+    Reader(Refill refill, Tag tag) : refill(refill), tag(tag) {}
 
     inline void skip(uint32_t n)
     {
@@ -90,7 +91,7 @@ struct Reader
 
         while (n > 0) {
             if (bits_valid_64 == 0) {
-                buf64 = bswap64(refill());
+                buf64 = bswap64(refill(tag));
                 bits_valid_64 = 64;
             }
             uint32_t take = std::min(n, bits_valid_64);
@@ -102,7 +103,7 @@ struct Reader
     }
     inline void init()
     {
-            buf64 = bswap64( refill() );
+            buf64 = bswap64( refill(tag) );
             buf32 = static_cast<uint32_t>(buf64 >> 32);
             buf64 <<= 32;
             bits_valid_64 = 32;
@@ -116,7 +117,6 @@ struct Reader
     {
         assert(n != 0);
         assert(n <= 32);
-
         return n == 32 ? buf32 : (buf32 >> (32-n));
     }
 };
