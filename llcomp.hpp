@@ -72,23 +72,27 @@ namespace llcomp
         out_vec.resize(2);
         std::memcpy(out_vec.data(), &hdr, sizeof(Header));
 
-        size_t pos[3];
+        std::pair<size_t,size_t> pos[3];
         auto load_next= [&]() {
             out_vec.push_back(0);
             return out_vec.size()-1;
         };
         auto flusher = [&](uint64_t v, int tag)
         {
-            out_vec[ pos[tag] ] = v;
-            pos[tag] = load_next();
+            out_vec[ pos[tag].first ] = v;
+            pos[tag].first = pos[tag].second;
+            pos[tag].second = 0;
         };
-        using Stream = BitStream::Writer<decltype(flusher), int>;
+        auto reserver = [&](int tag) {
+            pos[tag].second = load_next();
+        };
+        using Stream = BitStream::Writer<decltype(flusher),decltype(reserver), int>;
         std::vector<RLGR::Encoder<Stream>> encoders;
         encoders.reserve(3);
 
         for (int i = 0; i < 3; ++i) {
-            pos[i] = load_next();
-            encoders.emplace_back(Stream(flusher, i));
+            pos[i].first = load_next();
+            encoders.emplace_back(Stream(flusher,reserver, i));
         }
         // uint16_t Rshift = std::max(0, hdr.channels_depth - 8);
         // uint16_t Rmask = (1 << Rshift) - 1;
@@ -136,7 +140,7 @@ namespace llcomp
         public:
         uint32_t width{};
         uint32_t height{};
-        uint32_t channel_nb{};
+        uint8_t channel_nb{};
         uint8_t bits_per_channel{};
         enum class ChannelType{ none, uint8, uint16, uint16be };
         ChannelType channel_type{ ChannelType::none };
@@ -338,7 +342,7 @@ namespace llcomp
 
     auto compressImage(const RawImage& img)
     {
-        Header hdr{0, img.width, img.height, uint16_t(1 << 15), img.channel_nb, img.bits_per_channel };
+        Header hdr{0, img.width, img.height,static_cast<uint16_t>(1 << 15), img.channel_nb, img.bits_per_channel };
         if ( img.channel_type == RawImage::ChannelType::uint16 ) {
             auto pixels = img.as<uint16_t>();
             return rlgr_encode(hdr, [&]()

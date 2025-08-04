@@ -26,13 +26,14 @@ namespace BitStream {
     }
 #endif
 
-template <typename Flush, typename Tag>
+template <typename Flush, typename Reserve, typename Tag>
 struct Writer {
     uint64_t buf{0};
     uint32_t left{64};
     Flush flush_f;
+    Reserve reserve_f;
     Tag tag;
-    Writer(Flush flush_f, Tag tag) : flush_f(flush_f), tag(tag) {}
+    Writer(Flush flush_f, Reserve reserve_f, Tag tag) : flush_f(flush_f), reserve_f(reserve_f), tag(tag) {}
 
 /**
  * Write up to 32 bits into a bitstream.
@@ -56,6 +57,9 @@ inline void put_bits(uint32_t n, uint32_t value)
         flush_f(bswap64(buf), tag);
         left += 64 - n;
         buf = value; //it's ok that have extra MSB rem bits.. it's cuts on flush later
+    }
+    if (left < 32 && left + n >= 32) {
+        reserve_f(tag);
     }
 }
 

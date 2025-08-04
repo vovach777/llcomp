@@ -295,9 +295,9 @@ namespace RLGR
 				return {mag, size_t{0}};
 			}
 		}
-		std::pair<int, size_t> rle_state{0, size_t{-1}};
+		std::pair<int, size_t> rle_state{0, static_cast<size_t>(-1)};
 		int decode_rle() {
-			if (rle_state.second == size_t{-1}) {
+			if (rle_state.second == static_cast<size_t>(-1)) {
 				rle_state = decode();
 			}
 			int res = (rle_state.second == 0 ? rle_state.first : 0);
