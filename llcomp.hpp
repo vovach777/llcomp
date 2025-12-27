@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <cstdint>
 #include <string>
+#include <cstring>
 #include <string_view>
 #include <functional>
 #include <utility>
@@ -67,37 +68,23 @@ namespace llcomp
         const auto height = hdr.height;
         std::vector<std::vector<std::vector<int>>> line(2, std::vector<std::vector<int>>(3, std::vector<int>(width, 0)));
 
-        std::vector<uint64_t> out_vec;
-        out_vec.reserve(hdr.width*hdr.height*3/2);
-        out_vec.resize(2);
-        std::memcpy(out_vec.data(), &hdr, sizeof(Header));
+        BitStream::PagePool out_pool;
+        out_pool.reserve(hdr.width*hdr.height*3/2);
+        out_pool.acquire_page(); //для заголовка
+        out_pool.acquire_page();
 
-        std::pair<size_t,size_t> pos[3];
-        auto load_next= [&]() {
-            out_vec.push_back(0);
-            return out_vec.size()-1;
+        std::memcpy(&(out_pool[0]), &hdr, sizeof(Header));
+  
+        using Stream = BitStream::Writer;
+        std::array<RLGR::Encoder,3> encoders{
+            RLGR::Encoder(out_pool),
+            RLGR::Encoder(out_pool),
+            RLGR::Encoder(out_pool)
         };
-        auto flusher = [&](uint64_t v, int tag)
-        {
-            out_vec[ pos[tag].first ] = v;
-            pos[tag].first = pos[tag].second;
-            pos[tag].second = 0;
-        };
-        auto reserver = [&](int tag) {
-            pos[tag].second = load_next();
-        };
-        using Stream = BitStream::Writer<decltype(flusher),decltype(reserver), int>;
-        std::vector<RLGR::Encoder<Stream>> encoders;
-        encoders.reserve(3);
-
-        for (int i = 0; i < 3; ++i) {
-            pos[i].first = load_next();
-            encoders.emplace_back(Stream(flusher,reserver, i));
-        }
+        
         // uint16_t Rshift = std::max(0, hdr.channels_depth - 8);
         // uint16_t Rmask = (1 << Rshift) - 1;
-        uint16_t Rshift = 0;
-        uint16_t Rmask = 0;
+  
 
         for (uint32_t h = 0; h < height; ++h) {
             for (uint32_t w = 0; w < width; ++w) {
@@ -106,9 +93,9 @@ namespace llcomp
                     auto& g = line[h & 1][1][w];
                     auto& b = line[h & 1][2][w];
 
-                    r = urgb[0] >> Rshift;
-                    g = urgb[1] >> Rshift;
-                    b = urgb[2] >> Rshift;
+                    r = urgb[0];
+                    g = urgb[1];
+                    b = urgb[2];
 
                     b -= g;
                     r -= g;
@@ -119,17 +106,15 @@ namespace llcomp
                         const int t = h > 0 ? line[(h-1)&1][i][w] : l;
                         const int tl = h > 0 && w > 0 ? line[(h-1)&1][i][w-1] : t;
                         const int predict = median(l, l + t - tl, t);
-                        encoders[i].encode(static_cast<int>(line[h&1][i][w]) - predict);
-                        if (Rshift) {
-                            encoders[i].bitwriter.put_bits(Rshift, urgb[i] & Rmask);
-                        }
+                        encoders[i].put( Rice::to_unsigned( line[h&1][i][w] - predict));
+                  
                     }
             }
         }
         for (int i = 0; i < 3; ++i) {
             encoders[i].flush();
         }
-        return out_vec;
+        return out_pool.move();
     }
 
 
@@ -279,7 +264,8 @@ namespace llcomp
         Header hdr;
         RawImage img;
         std::memcpy(&hdr, data_begin, sizeof(Header));
-        auto it = data_begin+2;
+        BitStream::PagePool pool(std::vector<uint64_t>(data_begin+2, data_end));
+    
         img.width = hdr.width;
         img.height = hdr.height;
         img.channel_nb = 3;
@@ -288,19 +274,12 @@ namespace llcomp
         img.allocate();
         auto width = img.width;
         auto height = img.height;
-        auto featcher = [&](int tag) {
-            if ( it >= data_end ) return 0x55555555AAAAAAAAull;
-            return uint64_t{ *it++ };
+        using Stream = BitStream::Reader;
+        std::array<RLGR::Decoder,3> decoders{
+            RLGR::Decoder(pool),
+            RLGR::Decoder(pool),
+            RLGR::Decoder(pool)
         };
-        using Stream = BitStream::Reader<decltype(featcher), int>;
-        std::vector<RLGR::Decoder<Stream>> decoders;
-        decoders.reserve(3);
-
-        for (int i = 0; i < 3; ++i) {
-
-            auto& decoder = decoders.emplace_back(Stream(featcher, i));
-            decoder.init();
-        }
         uint8_t* pixels = img.as<uint8_t>();
         uint16_t* pixels16 = img.as<uint16_t>();
         bool is_16bit = img.bits_per_channel > 8;
@@ -314,7 +293,7 @@ namespace llcomp
                     const int l = w > 0 ? line[h & 1][i][w - 1] : h > 0 ? line[(h - 1) & 1][i][w] : 0;
                     const int t = h > 0 ? line[(h-1)&1][i][w] : l;
                     const int tl = h > 0 && w > 0 ? line[(h-1)&1][i][w-1] : t;
-                    line[h & 1][i][w] = decoders[i].decode_rle() + median(l, l + t - tl, t);
+                    line[h & 1][i][w] = Rice::to_signed( decoders[i].get() ) + median(l, l + t - tl, t);
                 }
                 int r = line[h & 1][0][w];
                 int g = line[h & 1][1][w];

@@ -10,120 +10,253 @@
 
 namespace BitStream {
 
-#ifdef _MSC_VER
-    inline constexpr uint32_t bswap32(uint32_t x)
-    {
-        return ((((x) << 8 & 0xff00) | ((x) >> 8 & 0x00ff)) << 16 | ((((x) >> 16) << 8 & 0xff00) | (((x) >> 16) >> 8 & 0x00ff)));
+    inline uint64_t bswap64(uint64_t x) noexcept { 
+        #if defined(__GNUC__) || defined(__clang__)
+            return __builtin_bswap64(x); 
+        #elif defined(_MSC_VER) 
+            return _byteswap_uint64(x); 
+        #else 
+            return ((x & 0x00000000000000FFull) << 56) | 
+                   ((x & 0x000000000000FF00ull) << 40) | 
+                   ((x & 0x0000000000FF0000ull) << 24) | 
+                   ((x & 0x00000000FF000000ull) << 8) | 
+                   ((x & 0x000000FF00000000ull) >> 8) | 
+                   ((x & 0x0000FF0000000000ull) >> 24) | 
+                   ((x & 0x00FF000000000000ull) >> 40) | 
+                   ((x & 0xFF00000000000000ull) >> 56);
+         #endif 
+        }
+        
+
+class PagePool {
+private:
+    std::vector<uint64_t> pages;
+    size_t write_pos = 0;  // Текущая позиция записи (для BitWriter)
+    mutable size_t read_pos = 0;   // Текущая позиция чтения (для BitReader)
+
+public:
+    PagePool() = default;
+    PagePool(std::vector<uint64_t> pages) : pages(pages), write_pos(pages.size()) {}
+
+    size_t acquire_page() {
+        pages.emplace_back(0);
+        return write_pos++;
     }
 
-    inline  constexpr uint64_t bswap64(uint64_t x)
-    {
-        return (uint64_t)bswap32(x) << 32 | bswap32(x >> 32);
+    uint64_t& operator[](size_t index) {
+        if (index >= pages.size()) {
+            throw std::out_of_range("PagePool: index out of range");
+        }
+        return pages[index];
     }
-#else
-    inline uint64_t bswap64(uint64_t x) {
-        return __builtin_bswap64(x);
+
+    uint64_t operator[](size_t index) const {
+        if (index >= pages.size()) {
+            throw std::out_of_range("PagePool: index out of range");
+        }
+        return pages[index];
     }
-#endif
 
-template <typename Flush, typename Reserve, typename Tag>
-struct Writer {
-    uint64_t buf{0};
-    uint32_t left{64};
-    Flush flush_f;
-    Reserve reserve_f;
-    Tag tag;
-    Writer(Flush flush_f, Reserve reserve_f, Tag tag) : flush_f(flush_f), reserve_f(reserve_f), tag(tag) {}
-
-/**
- * Write up to 32 bits into a bitstream.
- */
-
-inline void put_bits(uint32_t n, uint32_t value)
-{
-    if (n == 0)
-        return;
-    assert(n <= 32);
-    assert( (n == 32) || (value >> n) == 0 );
-    if (n <= left) {
-        buf <<= n;
-        buf |= value;
-        left -= n;
-    } else {
-        assert(left < 32);
-        auto rem = n - left;
-        buf <<= left;
-        buf |= static_cast<uint64_t>(value) >> rem;
-        flush_f(bswap64(buf), tag);
-        left += 64 - n;
-        buf = value; //it's ok that have extra MSB rem bits.. it's cuts on flush later
+    // Получает следующую страницу для чтения
+    size_t get_next_read_page() const {
+        if (read_pos >= write_pos) {
+            throw std::runtime_error("PagePool: no pages to read (sync error)");
+        }        
+        return read_pos++;
     }
-    if (left < 32 && left + n >= 32) {
-        reserve_f(tag);
+    size_t size() const {
+        return pages.size();
     }
-}
-
-inline void byte_align() {
-    uint32_t shift = left & 7;
-    buf <<= shift;
-    left -= shift;
-}
-
-void flush() {
-    if (left < 64) {
-        buf <<= left;
-        flush_f(bswap64(buf), tag);
-        buf = 0;
-        left = 64;
+    const uint64_t* data() const {
+        return pages.data();
     }
-}
+    void reserve(size_t n) {
+        pages.reserve(n);
+    }
 
+    std::vector<uint64_t> move() const {
+        return std::move( pages );
+    }
 };
-template <typename Refill, typename Tag>
-struct Reader
-{
-    uint64_t buf64{0}; // stores bits read from the buffer
-    uint32_t buf32{0};
-    uint32_t bits_valid_64{0}; // number of bits left in bits field
-    Refill refill;
-    Tag tag;
-    Reader(Refill refill, Tag tag) : refill(refill), tag(tag) {}
 
-    inline void skip(uint32_t n)
-    {
-        assert(n <= 32);
 
-        while (n > 0) {
-            if (bits_valid_64 == 0) {
-                buf64 = bswap64(refill(tag));
-                bits_valid_64 = 64;
+template <typename T, size_t N = 4>
+class RingArray {
+private:
+    std::array<T, N> buffer;
+    size_t head = 0;
+    size_t tail = 0;
+    size_t count = 0;
+
+public:
+    // Добавляет элемент в буфер
+    bool put(const T& item) {
+        if (count == N) return false;
+        buffer[tail] = item;
+        tail = (tail + 1) % N;
+        ++count;
+        return true;
+    }
+
+    // Извлекает элемент из буфера
+    bool get(T& item) {
+        if (count == 0) return false;
+        item = buffer[head];
+        head = (head + 1) % N;
+        --count;
+        return true;
+    }
+
+    bool peek(T& item) const {
+        if (count == 0) return false;
+        item = buffer[head];
+        return true;
+    }
+
+    size_t size() const { return count; }
+    bool empty() const { return count == 0; }
+    bool full() const { return count == N; }
+};
+
+
+class Writer {
+private:
+    PagePool& pool;
+    RingArray<size_t, 4> res;  // Хранит индексы страниц
+    uint64_t buf = 0;
+    int left = 64;  // Количество свободных бит в buf
+
+    // Вычисляет количество доступных бит
+    size_t available_bits() const {        
+        return res.size() * 64 + left - 64;
+    }
+
+public:
+    Writer(PagePool& pool) : pool(pool) {}
+
+    // Резервирует не менее N бит
+    void reserve(size_t N) {
+        while (available_bits() < N) {
+            if (res.full()) {
+                throw std::runtime_error("BitWriter::reserve ring buffer is full (sync error)");
             }
-            uint32_t take = std::min(n, bits_valid_64);
-            buf32 = (take == 32) ? static_cast<uint32_t>(buf64 >> 32) : (buf32 << take | static_cast<uint32_t>(buf64 >> (64 - take)));
-            buf64 <<= take;
-            bits_valid_64 -= take;
-            n -= take;
+            size_t page_idx = pool.acquire_page();
+            res.put(page_idx);
+        }        
+    }
+
+    // Запись n бит из value (n <= 32)
+    void put_bits(int n, uint32_t value) {
+        assert(n <= 32 && "put_bits: n must be <= 32");
+        assert( (n == 32) || (value >> n) == 0 );
+        if (n <= left) {
+            buf <<= n;
+            buf |= value;
+            left -= n; //если left == 0 : flush сбросит
+        } else {
+            auto rem = n - left;
+            buf <<= left;
+            buf |= static_cast<uint64_t>(value) >> rem;
+            size_t page_idx; 
+            if (!res.get(page_idx)) {
+                throw std::runtime_error("BitWriter::put_bits no reserved pages (sync error)");
+            }
+            pool[page_idx] = bswap64(buf);
+            left += 64 - n;
+            buf = value; //тут мы не делаем  `& ((1 << rem) - 1)` потому что мусорные биты будут выталкнуты из 64 бит регистра
         }
     }
-    inline void init()
-    {
-            buf64 = bswap64( refill(tag) );
-            buf32 = static_cast<uint32_t>(buf64 >> 32);
-            buf64 <<= 32;
-            bits_valid_64 = 32;
+
+    // Сброс оставшихся бит в пул
+    void flush() {
+        if (left < 64) {
+            // Страницы уже зарезервированы через reserve(N),
+            // поэтому просто берём следующую страницу из кольца
+            size_t page_idx;
+            if (!res.get(page_idx)) {
+                throw std::runtime_error("BitWriter::flush no reserved pages (sync error)");
+            }
+            buf <<= left;
+            pool[page_idx] = bswap64(buf);
+            buf = 0;
+            left = 64;
+        }
+    }
+};
+
+
+
+class Reader {
+private:
+    const PagePool& pool;
+    RingArray<size_t, 4> res;  // Хранит индексы страниц
+    uint64_t buf = 0;
+    int bits_valid = 0;  // Количество значимых бит в buf (0..64)
+
+    size_t available_bits() const {
+        return bits_valid + res.size() * 64;
     }
 
-    inline uint32_t peek32()
-    {
-        return buf32;
+public:
+    Reader(const PagePool& pool) : pool(pool) {}
+
+    void reserve(size_t N) {
+        while (available_bits() < N) {
+            if (res.full()) {
+                throw std::runtime_error("BitReader::reserve ring buffer is full (sync error)");
+            }
+            size_t page_idx = pool.get_next_read_page();
+            res.put(page_idx);
+        }
+        if (bits_valid == 0) {
+            size_t idx;
+            if (!res.get(idx)) {
+                throw std::runtime_error("BitReader::reserve  out of reserve!");
+            }
+            buf = bswap64(pool[idx]);
+            bits_valid = 64;
+        }
     }
+
+    // peek32() — просмотр следующих 32 бит без изменения состояния.
+    // НИКАКИХ reserve() внутри. Если не хватает зарезервированных бит — падение.
+    uint32_t peek32() {
+        assert(available_bits() >= 32 && "BitReader::peek32: insufficient reserve");
+        if (bits_valid < 32) {
+            size_t idx;
+            if (!res.peek(idx)) {
+                assert(false && "BitReader::peek32 out of reserve!");
+            }
+            uint64_t next  = bswap64(pool[idx]);
+            uint32_t take  = 32-bits_valid;
+            uint64_t chunk = (next >> (64-take));            
+            buf |= chunk << 32;
+        }
+        return buf >> 32;
+    }
+
     inline uint32_t peek_n(uint32_t n)
     {
         assert(n != 0);
         assert(n <= 32);
-        return n == 32 ? buf32 : (buf32 >> (32-n));
+        return peek32() >> (32-n);
+    }
+
+    void skip(int n) {
+        if (n <= bits_valid) {
+            bits_valid -= n;
+            buf <<= n;
+        } else {
+            n -= bits_valid;
+            size_t idx;
+            if (!res.get(idx)) {
+                throw std::runtime_error("BitReader::skip out of reserve!");
+            }
+            buf = __builtin_bswap64(pool[idx]) << n;
+            bits_valid = 64-n;
+        }        
     }
 };
 
-}
 
+}
