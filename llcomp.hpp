@@ -69,7 +69,7 @@ namespace llcomp
         std::vector<std::vector<std::vector<int>>> line(2, std::vector<std::vector<int>>(3, std::vector<int>(width, 0)));
 
         BitStream::PagePool out_pool;
-        out_pool.reserve(hdr.width*hdr.height*3/2);
+        out_pool.reserve(hdr.width*hdr.height*2/8);
         out_pool.acquire_page(); //для заголовка
         out_pool.acquire_page();
 
@@ -264,6 +264,9 @@ namespace llcomp
         Header hdr;
         RawImage img;
         std::memcpy(&hdr, data_begin, sizeof(Header));
+        if (!hdr.check()) {
+            throw std::runtime_error("Header CRC check failed");
+        }
         BitStream::PagePool pool(std::vector<uint64_t>(data_begin+2, data_end));
     
         img.width = hdr.width;
@@ -322,6 +325,7 @@ namespace llcomp
     auto compressImage(const RawImage& img)
     {
         Header hdr{0, img.width, img.height,static_cast<uint16_t>(1 << 15), img.channel_nb, img.bits_per_channel };
+        hdr.protect();
         if ( img.channel_type == RawImage::ChannelType::uint16 ) {
             auto pixels = img.as<uint16_t>();
             return rlgr_encode(hdr, [&]()

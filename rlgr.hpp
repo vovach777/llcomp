@@ -54,9 +54,39 @@ int bit_width(T x) {
 
     inline void adapt_k(uint32_t value, uint32_t &k) {
     
-        k = std20::bit_width(value);
+        //k = std20::bit_width(value);
+        if (value == 0) {
+            k = 0;
+            return;
+        }
+        //int value_of_k = k < 3? k : (((1 << k) ) >> 1) + 1;//k=0: 0; k=1: 1; k=2: 4/2+1=3; k=3: 8/2+1=5; k=4: 16/2+1=9; k=5: 32/2+1=17
+        //k = std20::bit_width((value * 5 + value_of_k * 3) >> 3);
+        //k = std20::bit_width((value * 2 + value / 2 + value_of_k + value_of_k/2+3) / 4);
 
+        // uint32_t value_of_k = k < 2? k : ((1 << (k+1))) / 3;
+        // k = std20::bit_width((value * 4 + value + value_of_k*3) / 8);
+        uint32_t value_of_k = k < 4? k*2 : ((1 << (k+1))); //TODO: tune k=2,3
+        k = std20::bit_width((value * 4 + value + value_of_k) / 8);
+ 
     }
+
+    
+    // inline void adapt_k(uint32_t value, uint32_t &k) {
+        
+    //     //int prev_k = k;
+    //     const uint32_t k2 = std20::bit_width(value);
+    //     if (k2 == 0){
+    //         k = 0;
+    //         return;
+    //     }
+    //     if ( k < k2) 
+    //         k += std::clamp((k2-k)*3/5,1U,8U);
+    //     else
+    //     if ( k > k2 )
+    //         k -= std::clamp( (k-k2)*3/5, 1U, 8U);
+
+    //     //std::cout << value <<  " k: " << prev_k << " => " << k << std::endl;
+    // }
 
     // Rice code: Encode unsigned integer x with parameter m
     template <typename Writer>
