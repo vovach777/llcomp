@@ -144,11 +144,14 @@ class Encoder {
     uint32_t k=0;
     uint32_t rl=0;
     uint32_t kr=0;
-    uint32_t kz=8;
+    uint32_t kz=4;
     BitStream::Writer s;
     
     public:
     Encoder(BitStream::PagePool& pool) : s(pool) {}
+    uint32_t get_k() const {
+        return k;
+    }
 
     void put(int v) {
         if constexpr (RLMode) {
@@ -186,12 +189,15 @@ class Encoder {
 class Decoder {
     uint32_t k=0;
     uint32_t kr=0;
-    uint32_t kz=8;
+    uint32_t kz=4;
     uint32_t rl{0};
     uint32_t val=0;
     BitStream::Reader s;
     public:
     Decoder(const BitStream::PagePool& pool) : s(pool) {}
+    uint32_t get_k() const {
+        return k;
+    }
     int get() {
 
         if constexpr (RLMode) {
