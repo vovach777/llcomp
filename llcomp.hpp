@@ -277,12 +277,20 @@ namespace llcomp
         img.allocate();
         auto width = img.width;
         auto height = img.height;
+        size_t count = size_t(width) * height;
         using Stream = BitStream::Reader;
         std::array<RLGR::Decoder,3> decoders{
-            RLGR::Decoder(pool),
-            RLGR::Decoder(pool),
-            RLGR::Decoder(pool)
+            RLGR::Decoder(pool, (count / 3) + (0 < (count % 3))),
+            RLGR::Decoder(pool, (count / 3) + (1 < (count % 3))),
+            RLGR::Decoder(pool, (count / 3) + (2 < (count % 3)))
         };
+        std::cerr << "count = " << count << std::endl;
+        std::cerr << "decoders[0] stream_size = " << decoders[0].stream_size << std::endl;
+        std::cerr << "decoders[1] stream_size = " << decoders[1].stream_size << std::endl;
+        std::cerr << "decoders[2] stream_size = " << decoders[2].stream_size << std::endl;
+        std::cerr << "decoders[0] direct stream size = " << ((count / 3) + (1 < (count % 3))) << std::endl;
+        std::cerr << "count/3 = " << (count / 3) << std::endl;
+        std::cerr << "count%3 = " << int( 0 < (count % 3) ) << std::endl;
         uint8_t* pixels = img.as<uint8_t>();
         uint16_t* pixels16 = img.as<uint16_t>();
         bool is_16bit = img.bits_per_channel > 8;

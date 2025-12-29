@@ -221,6 +221,10 @@ public:
     // peek32() — просмотр следующих 32 бит без изменения состояния.
     // НИКАКИХ reserve() внутри. Если не хватает зарезервированных бит — падение.
     uint32_t peek32() {
+        if (available_bits() < 32) {
+            std::cerr << "BitReader::peek32: available_bits()=" << available_bits() << " < 32" << std::endl;
+            throw std::runtime_error("BitReader::peek32: insufficient reserve");
+        }
         assert(available_bits() >= 32 && "BitReader::peek32: insufficient reserve");
         if (bits_valid < 32) {
             size_t idx;
