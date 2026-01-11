@@ -1,315 +1,289 @@
-#include <cmath>
-#include <algorithm>
+#pragma once
 #include <cstdint>
-#include <cmath>
+#include <algorithm>
 #include <cassert>
-#include <iterator>
-#include <utility>
-#include <cstring>
-#include <iostream>
-#include <iomanip>
-#include <vector>
-#include <array>
-
-
-
-namespace std20 {
-template <class T>
-int bit_width(T x) {
-    using U = std::make_unsigned_t<T>;
-    U v = static_cast<U>(x);
-    if (v == 0) return 0;
-
-    constexpr int bits = std::numeric_limits<U>::digits;
-
-    if constexpr (sizeof(U) <= sizeof(unsigned int)) {
-        return bits - __builtin_clz(v);
-    } else if constexpr (sizeof(U) <= sizeof(unsigned long)) {
-        return bits - __builtin_clzl(v);
-    } else {
-        return bits - __builtin_clzll(v);
-    }
-}
-}
-
-namespace Rice
-{
-
-
-    inline uint32_t to_unsigned(int32_t v)
-    {
-        // Используем статический каст к беззнаковому типу перед сдвигом,
-        // чтобы избежать UB при сдвиге отрицательных чисел.
-        return (static_cast<uint32_t>(v) << 1) ^ static_cast<uint32_t>(v >> 31);
-    }
-    
-    inline int32_t to_signed(uint32_t uv)
-    {
-        // Здесь логика верна: (uv >> 1) извлекает модуль, 
-        // а (-(uv & 1)) создает маску из всех 1 (если нечетное) или всех 0 (если четное).
-        return static_cast<int32_t>((uv >> 1) ^ -(uv & 1));
-    }
-
-
-// Rice code: Encode unsigned integer x with parameter m
-template <typename Writer>
-void write(uint32_t x, uint32_t m, Writer &&writer)
-{
-    auto quotient = x >> m; 
-    //std::cerr << quotient << " ";
-    auto remainder = x & ((1 << m) - 1);
-    if (quotient >= 32)
-    {
-        //std::cout << "!!! " << quotient << std::endl;
-        writer.put_bits(32,0xffffffffu);
-        writer.put_bits(32,x);
-    } else {
-        writer.put_bits(quotient + 1, ((1ULL << (quotient))-1) << 1); // Write quotient bits
-        writer.put_bits(m, remainder);
-    }
-}
-
-template <typename Reader>
-uint32_t read(uint32_t m, Reader&& reader)
-{
-    uint32_t res;
-    if (reader.peek32() == 0xffffffffu)
-    {
-        reader.skip(32);
-        res = reader.peek32();
-        reader.skip(32);
-    } else {
-        uint32_t quotient = 0;
-        auto ones_in_buffer = __builtin_clz(~reader.peek32());
-        reader.skip(ones_in_buffer + 1);
-        quotient += ones_in_buffer;
-        if (m==0) {
-            res=quotient;
-        } else { 
-            auto remainder = reader.peek_n(m);
-            reader.skip(m);
-            res = remainder + (quotient << m);
-        }
-    }
-    return res;
-}
-}
-
+#include "ring.hpp"
+#include "pool.hpp"
+#include "model.hpp"
+#include "bitstream.hpp"
+#include "rice.hpp"
 
 namespace RLGR {
-constexpr uint32_t MAX_K = 240;
-class Encoder {
+    constexpr uint32_t MAX_K = 240;
+    constexpr uint32_t UP_K = 4;
+    constexpr uint32_t DOWN_K = 6;
+    constexpr uint32_t UP_K_DIRECT_RL = 3;
+    constexpr uint32_t DOWN_K_DIRECT_RL = 3;
+    //constexpr uint32_t UP_K_RICE = 2;
+    constexpr uint32_t DOWN_K_RICE = 2;
+    class Encoder { 
+        uint32_t rl=0;
+        uint32_t k=0;
+        uint32_t kr=0;
+#ifdef USE_MODEL_K
+        ModelK model;
+#endif
+        bool inrun{false};
+        BitStream::Writer s;     
+        public:
+        Encoder(PagePool& pool) : s(pool) {}
     
-    
-    uint32_t rl=0;
-    uint32_t k=0;
-    uint32_t kr=0;
-    BitStream::Writer s;
-
-    
-    public:
-    Encoder(BitStream::PagePool& pool) : s(pool) {}
-
-    void put(int v) {
-        uint32_t k_ = k >> 3;
-        uint32_t kr_ = kr >> 3;
-        uint32_t kr__ = kr_;                
-        if (k_ > 0) { 
-            if (rl == 0)
-                s.reserve(128);   
-            if (v == 0) {
-                
-               rl++;
-               if (rl == (1u << k_)) {
-                   //model.update(0);
-                  s.put_bits(1,0);// полное окно
-                  rl=0;
-                  k += 4;
-                  if (k > MAX_K)
-                    k = MAX_K;
-                  k_ = k >> 3;
-                  //s.reserve(1+k_); 
-               }
-            } else {                
-                s.put_bits(1,1);
-                s.put_bits(k_,rl);
-                //s.reserve(64);
-                rl=0;
-                k -= k > 6 ? 6 : k;
-                //k_ = k >> 3;
-                /* v is positive here */
-                // if (kr__ <= 15 &&  model.trust()) {
-                //     kr__ = model.get_k();
-                // }
-                //std::cerr << " T";
-                Rice::write(v-1,kr__,s);
-                //model.update( std::min(15, std20::bit_width(v-1)));
-                uint32_t vk = v >> kr_;
-                if (vk == 0) {
-                    kr -= kr > 2 ? 2 : kr;
-                } else
-                if (vk != 1) {
-                    kr += vk;
-                    if (kr > MAX_K) 
-                        kr = MAX_K;
-                }
-
-            }
-        } else {
-            s.reserve(64);//max GR code length ESC+raw code = 64bit
-            // if (kr__ <= 15 &&  model.trust()) {
-            //     kr__ = model.get_k();
-            // }
-            Rice::write(v,kr__,s);            
-            uint32_t vk = v >> kr_;
-            if (vk == 0) {
-                kr -= kr > 2 ? 2 : kr;
-            } else
-            if (vk != 1) {
-                kr += vk;
-                if (kr > MAX_K)
-                    kr = MAX_K;
-            }
-            if (v == 0) {
-                k += 3;
-                if (k > MAX_K)
-                    k = MAX_K;
-            } else {
-                k -= k > 3 ? 3 : k;
-            }
-            //model.update( std::min(15, std20::bit_width(v)));
+        void reserve(int res) {
+            s.reserve(res); //syncpoint before
         }
-    }
-
-    void flush() {
-        if (rl > 0) {
-            uint32_t k_ = k>>3;
-            assert(k_ > 0);
-            s.put_bits(1,1);
-            s.put_bits(k_,rl);
-        }
-        s.flush();
-        //std::cout << "model nodes = " <<  model.get_nodes_count() << std::endl;
-    }
-};
-
-class Decoder {    
-    uint32_t rl=static_cast<uint32_t>(-1);
-    uint32_t rl_val{0};
-    bool run_mode{false};
-    uint32_t k=0;
-    uint32_t kr=0;
-    BitStream::Reader s;
-    public:
-    size_t stream_size{0};
-    public:
-    Decoder(const BitStream::PagePool& pool, size_t stream_size=size_t(-1)) : s(pool), stream_size(stream_size) {}
     
-    int get() {        
-        if (run_mode) {
-            if (rl == 0 ) {
-                run_mode = false;
-                //rl_val == 0 -> полное окно. нет символа терминатора пока. 
-                if (rl_val != 0)
-                   return rl_val;
-            } else {
-                rl--;
-                return 0;
-            }
-        }
-        assert(stream_size > 0 && "read after eof");
-        uint32_t k_ = k >> 3;
-        uint32_t kr_ = kr >> 3;
-        uint32_t kr__ = kr_;
-        if (k_ > 0) {
-            s.reserve(128);
-            run_mode = true;
-            if ( s.peek_n(1) == 0) {
-                //model.update(0);
-                s.skip(1);
-                //полное окно                
-                rl = 1 << k_;
-                k += 4;
-                if (k > MAX_K)
-                    k = MAX_K;
-                //k_ = k >> 3;
-                assert( stream_size >= rl);
-                stream_size -= rl;
-                //full windows = sync point
-                //s.reserve(1+k_);
-                rl_val = 0;
-                rl--;
-                assert(rl > 0);
-                return 0; 
-            } else {
-                s.skip(1);
-                rl = s.peek_n(k_);
-                s.skip(k_);
-                //s.reserve(64);
-                k -= k > 6 ? 6 : k;
-                //k_ = k >> 3;
-                /* v is positive here */
-                assert( stream_size >= rl);
-                stream_size -= rl;
-                if (stream_size > 0) {
-                    stream_size--;
-                    // if (kr__ <= 15 &&  model.trust()) {
-                    //     kr__ = model.get_k();
-                    // }
-                    rl_val = Rice::read(kr__,s) + 1;
-                    uint32_t vk = rl_val >> kr_;
+        void put(uint32_t v) {
+    
+            uint32_t k_ = k >> 3;
+            uint32_t kr_ = kr >> 3;
+            uint32_t kr__ = kr_;                
+            if (k_ > 0) { 
+                    if (!inrun) {
+                        reserve(1+k_);
+                        inrun = true;
+                    }
+                if (v == 0) {                               
+                   rl++; 
+                   if (rl == (1u << k_)) {
+                     assert(rl != 1);
+#ifdef USE_MODEL_K
+                      model.update(0);
+#endif
+                      s.put_bits(1,0);// полное окно
+                      rl=0;
+                      k += UP_K;
+                      if (k > MAX_K)
+                        k = MAX_K;
+                      k_ = k >> 3;
+                      //когда декодер вычитает этот бит полного окна - он обязать ждать rl-шагов прежде чем сделать этот резерв
+                      reserve(1+k_);//k может вырастить тут - мы не будем ее считать - просто заразервируем 2 бита
+                   }
+                } else {        
+                    inrun = false;  
+                    s.put_bits(1,1);                
+                    s.put_bits(k_,rl);
+                    //тут уже нет резерва.
+                    //тут можно сразу сказать декодеру сколько нужно брать из полубайты
+                    //после того как он выдаст все свои нули. если декодер сразу прочитает 
+                    //терминатор, то он не попадёт в своё окно. окно будет тут, а это будущее для декодера
+                    
+                    //std::cerr << "RL " << rl << std::endl;
+               
+                    k -= k > DOWN_K ? DOWN_K : k;
+#ifdef USE_MODEL_K
+                    if (kr__ <= 15 &&  model.trust()) {
+                        kr__ = model.get_k();
+                    } 
+#endif
+                    reserve(64);
+                    rl=0; 
+                    v--;
+                    Rice::write(v,kr__,s);
+#ifdef USE_MODEL_K
+                    model.update( std::min(15, std20::bit_width(v)));
+#endif
+                    uint32_t vk = (v) >> kr_;
                     if (vk == 0) {
-                        kr -= kr > 2 ? 2 : kr;
+                        kr -= kr > DOWN_K_RICE ? DOWN_K_RICE : kr;
                     } else
                     if (vk != 1) {
                         kr += vk;
                         if (kr > MAX_K) 
                             kr = MAX_K;
                     }
-                    //model.update( std::min(15, std20::bit_width( rl_val -1 ) ));
-                } else {
-                    //std::cerr << "skip terminator (out of size)" << std::endl;
-                    rl_val = 0; //virtual terminator
                 }
-                if (rl==0) {
-                    //остатка нет - это значит что нулей нет и нужно сразу выдать rl_val
-                    assert(rl_val != 0 && "read after eof"); //rl=0 + out rl_val. if rl_val == 0 there is no value = but it must exist (host wona symbol)
-                    run_mode = false;
-                    return rl_val; //sync point
-                } 
-                rl--;
-                return 0;//if rl == 0 : sync point
+            } else {
+                rl=0;
+                reserve(64); 
+#ifdef USE_MODEL_K
+                if (kr__ <= 15 &&  model.trust()) {
+                    kr__ = model.get_k();
+                }
+#endif
+                Rice::write(v,kr__,s);            
+                uint32_t vk = v >> kr_;
+                if (vk == 0) {
+                    kr -= kr > DOWN_K_RICE ? DOWN_K_RICE : kr;
+                } else
+                if (vk != 1) {
+                    kr += vk;
+                    if (kr > MAX_K)
+                        kr = MAX_K;
+                }
+                if (v == 0) {
+                    k += UP_K_DIRECT_RL;
+                    if (k > MAX_K)
+                        k = MAX_K;
+                } else {
+                    k -= k > DOWN_K_DIRECT_RL ? DOWN_K_DIRECT_RL : k;
+                }
+                k_ = k >> 3;
+#ifdef USE_MODEL_K
+                model.update( std::min(15, std20::bit_width(v)));
+#endif
             }
-        }        
-        s.reserve(64);//max GR code length ESC+raw code = 64bit
-        // if (kr__ <= 15 &&  model.trust()) {
-        //     kr__ = model.get_k();
-        // }
-
-        uint32_t v = Rice::read(kr__,s);
-        uint32_t vk = v >> kr_;
-        if (vk == 0) {
-            kr -= kr > 2 ? 2 : kr;
-        } else
-        if (vk != 1) {
-            kr += vk;
-            if (kr > MAX_K)
-                kr = MAX_K;
         }
-        if (v == 0) {
-            k += 3;
-            if (k > MAX_K)
-                k = MAX_K;
-        } else {
-            k -= k > 3 ? 3 : k;
+    
+        void flush() {
+            if (rl > 0) {
+                uint32_t k_ = k>>3;    
+                assert(k_ > 0);
+                s.put_bits(1,1);
+                s.put_bits(k_,rl);
+            }
+            s.flush();
         }
-        stream_size--;
-        //model.update( std::min(15, std20::bit_width( v ) ));
-
-        return v;
-    }
-
-};
+    };
+    
+    class Decoder {
+    private:
+        uint32_t rl = 0;
+        bool run_mode{false};
+        uint32_t k = 0;
+        uint32_t kr = 0;
+    #ifdef USE_MODEL_K   
+        ModelK model;
+    #endif
+        bool fullrl{false};
+    
+        BitStream::Reader s;
+    
+    
+        void reserve(int res) {
+            s.reserve(res);
+        }
+    
+        uint32_t readRL(bool terminator = false) {
+            uint32_t kr_ = kr >> 3;
+            uint32_t kr__ = kr_;
+    #ifdef USE_MODEL_K
+            if (kr__ <= 15 && model.trust()) {
+                kr__ = model.get_k();
+            }
+    #endif
+            auto rl_val = Rice::read(kr__, s);
+            uint32_t vk = rl_val >> kr_;
+            if (vk == 0) {
+                kr -= kr > DOWN_K_RICE ? DOWN_K_RICE : kr;
+            } else if (vk != 1) {
+                kr += vk;
+                if (kr > MAX_K)
+                    kr = MAX_K;
+            }
+    #ifdef USE_MODEL_K
+            model.update(std::min(15, std20::bit_width(rl_val)));
+    #endif
+            return rl_val + terminator;
+        }
+    
+        // Логика завершения частичной серии (бывшая метка rl_0)
+        uint32_t finish_partial_run() {
+            reserve(64);
+            k -= k > DOWN_K ? DOWN_K : k;
+            auto t = readRL(true);
+            run_mode = false;
+            stream_size--;
+            return t;
+        }
+    
+        // Единый метод обработки шага внутри run_mode (бывшая метка rl_entry)
+        uint32_t process_run() {
+            if (fullrl) {
+                assert(rl > 0);
+                rl--;
+                if (rl == 0) {
+                    // Конец полного окна
+                    k += UP_K;
+                    if (k > MAX_K)
+                        k = MAX_K;
+                    auto k_ = k >> 3;
+                    reserve(1 + k_);
+                    run_mode = false;
+                }
+                stream_size--;
+                return 0;
+            } else {
+                // Частичная серия
+                if (rl == 0) {
+                    return finish_partial_run();
+                }
+                assert(rl > 0);
+                rl--;
+                // Возвращаем 0, режим run_mode остается true
+                return 0; 
+            }
+        }
+    
+        uint32_t read_direct() {
+            reserve(64);
+            uint32_t v = readRL();
+            if (v == 0) {
+                k += UP_K_DIRECT_RL;
+                if (k > MAX_K)
+                    k = MAX_K;
+            } else {
+                k -= k > DOWN_K_DIRECT_RL ? DOWN_K_DIRECT_RL : k;
+            }
+            stream_size--;
+            return v;
+        }
+    
+    public:
+        size_t stream_size{0};
+    
+        Decoder(const  PagePool &pool, size_t stream_size = size_t(-1)) 
+            : s(pool), stream_size(stream_size) {
+        }
+    
+        uint32_t get() {
+            // 1. Если уже в режиме серии - продолжаем (аналог прямого перехода на rl_entry)
+            if (run_mode) {
+                return process_run();
+            }
+    
+            assert(stream_size > 0 && "read after eof");
+            
+            uint32_t k_ = k >> 3;
+            
+            // 2. Попытка входа в режим серии
+            if (k_ > 0) {
+                assert(rl == 0);
+    
+                // Оптимизация reserve из оригинала: делается только если fullrl был false
+                // Важно: здесь используется значение fullrl от ПРЕДЫДУЩЕГО шага
+                if (!fullrl) {
+                    reserve(1 + k_);
+                }
+                
+                // Читаем бит режима
+                fullrl = s.peek_n(1) == 0;
+                s.skip(1);
+                run_mode = true;
+    
+                if (fullrl) {
+    #ifdef USE_MODEL_K
+                    model.update(0);
+    #endif
+                    rl = 1 << k_;
+    
+                } else {
+                    rl = s.peek_n(k_);
+                    s.skip(k_);
+                    
+                    // В оригинале: if (rl == 0) goto rl_0;
+                    if (rl == 0) {
+                        return finish_partial_run();
+                    }
+                    
+    
+                }
+                // В оригинале: goto rl_entry;
+                return process_run();
+            }
+    
+            // 3. Прямое чтение (k=0)
+            return read_direct();
+        }
+    };
 }
-
-
+    

@@ -20,7 +20,7 @@
 #include <nmmintrin.h>
 #include <sstream>
 #include <fstream>
-
+#include "pool.hpp"
 #include "bitstream.hpp"
 #include "rlgr.hpp"
 
@@ -68,7 +68,7 @@ namespace llcomp
         const auto height = hdr.height;
         std::vector<std::vector<std::vector<int>>> line(2, std::vector<std::vector<int>>(3, std::vector<int>(width, 0)));
 
-        BitStream::PagePool out_pool;
+        PagePool out_pool;
         out_pool.reserve(hdr.width*hdr.height*2/8);
         out_pool.acquire_page(); //для заголовка
         out_pool.acquire_page();
@@ -267,7 +267,7 @@ namespace llcomp
         if (!hdr.check()) {
             throw std::runtime_error("Header CRC check failed");
         }
-        BitStream::PagePool pool(std::vector<uint64_t>(data_begin+2, data_end));
+        PagePool pool(std::vector<uint64_t>(data_begin+2, data_end));
     
         img.width = hdr.width;
         img.height = hdr.height;
@@ -284,13 +284,6 @@ namespace llcomp
             RLGR::Decoder(pool, (count / 3) + (1 < (count % 3))),
             RLGR::Decoder(pool, (count / 3) + (2 < (count % 3)))
         };
-        std::cerr << "count = " << count << std::endl;
-        // std::cerr << "decoders[0] stream_size = " << decoders[0].stream_size << std::endl;
-        // std::cerr << "decoders[1] stream_size = " << decoders[1].stream_size << std::endl;
-        // std::cerr << "decoders[2] stream_size = " << decoders[2].stream_size << std::endl;
-        // std::cerr << "decoders[0] direct stream size = " << ((count / 3) + (1 < (count % 3))) << std::endl;
-        // std::cerr << "count/3 = " << (count / 3) << std::endl;
-        // std::cerr << "count%3 = " << int( 0 < (count % 3) ) << std::endl;
         uint8_t* pixels = img.as<uint8_t>();
         uint16_t* pixels16 = img.as<uint16_t>();
         bool is_16bit = img.bits_per_channel > 8;

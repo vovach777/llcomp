@@ -526,31 +526,8 @@ struct Reader
     }
 
     void reserve(uint32_t count) {
-        //count = std::max(count,32U);
-        // if (credit == -1) {
-        //     credit = 1;
-        //     //  while (valid_reserved() < count)  {
-        //     //     //assert(credit == 0);
-        //     //     res.put((*pool)++);
-        //     // }  
-        //     // accum_pool = res.peek();
-        //     // buf64 = bswap64( *res.get() );
-        //     // bits_valid_64 = 32;
-        //     // buf32 = buf64 >> 32;
-        //     // buf64 <<= 32;
-        //     // bits_valid = 64;
-        //     // credit = 0;
-
-        
-        //     // return;  
-        // }
-
         bool glue_operation = bits_valid < 32;
-        if (glue_operation) {
-            //std::cout << "valid_reserved=" << valid_reserved() << " bits_valid=" << bits_valid << " bits_valid_64=" << bits_valid_64 << " count=" << count << std::endl;
-            //assert(credit == 1);
-        }
-
+     
         while (valid_reserved() < count)  {
             //assert(credit == 0);
            res.put((*pool)++);
@@ -658,13 +635,7 @@ class Encoder {
     ModelK model;
     bool inrun{false};
     BitStream::Writer s; 
-
-    
     public:
-
-
-
-
     Encoder(uint64_t**pool) : s(pool) {
     }
 
