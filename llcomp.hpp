@@ -23,6 +23,7 @@
 #include "pool.hpp"
 #include "bitstream.hpp"
 #include "rlgr.hpp"
+//#define USE_SIMPLE_RLGR
 
 namespace llcomp
 {
@@ -69,18 +70,24 @@ namespace llcomp
         std::vector<std::vector<std::vector<int>>> line(2, std::vector<std::vector<int>>(3, std::vector<int>(width, 0)));
 
         PagePool out_pool;
-        out_pool.reserve(hdr.width*hdr.height*2/8);
+        out_pool.reserve(hdr.width*hdr.height);
         out_pool.acquire_page(); //для заголовка
         out_pool.acquire_page();
 
         std::memcpy(&(out_pool[0]), &hdr, sizeof(Header));
-  
-        using Stream = BitStream::Writer;
+#ifdef USE_SIMPLE_RLGR
+        std::array<RLGR::Simple::Encoder,3> encoders{
+            RLGR::Simple::Encoder(out_pool),
+            RLGR::Simple::Encoder(out_pool),
+            RLGR::Simple::Encoder(out_pool)
+        };
+#else
         std::array<RLGR::Encoder,3> encoders{
             RLGR::Encoder(out_pool),
             RLGR::Encoder(out_pool),
             RLGR::Encoder(out_pool)
         };
+#endif
         
         // uint16_t Rshift = std::max(0, hdr.channels_depth - 8);
         // uint16_t Rmask = (1 << Rshift) - 1;
@@ -258,17 +265,20 @@ namespace llcomp
 
     };
 
-    inline auto rlgr_decode(const uint64_t *data_begin, const uint64_t *data_end)
+    inline auto rlgr_decode(std::vector<uint64_t> & poolvec)
     {
         size_t rgb_pos = 0;
         Header hdr;
         RawImage img;
-        std::memcpy(&hdr, data_begin, sizeof(Header));
+       
+        PagePool pool(std::move(poolvec));
+        pool.get_next_read_page(); //пропускаем заголовок
+        pool.get_next_read_page();
+    
+        std::memcpy(&hdr, &(pool[0]), sizeof(Header));
         if (!hdr.check()) {
             throw std::runtime_error("Header CRC check failed");
         }
-        PagePool pool(std::vector<uint64_t>(data_begin+2, data_end));
-    
         img.width = hdr.width;
         img.height = hdr.height;
         img.channel_nb = 3;
@@ -279,11 +289,19 @@ namespace llcomp
         auto height = img.height;
         size_t count = size_t(width) * height * 3;
         using Stream = BitStream::Reader;
+        #ifdef USE_SIMPLE_RLGR
+        std::array<RLGR::Simple::Decoder,3> decoders{
+            RLGR::Simple::Decoder(pool),
+            RLGR::Simple::Decoder(pool),
+            RLGR::Simple::Decoder(pool)
+        };
+        #else
         std::array<RLGR::Decoder,3> decoders{
             RLGR::Decoder(pool, (count / 3) + (0 < (count % 3))),
             RLGR::Decoder(pool, (count / 3) + (1 < (count % 3))),
             RLGR::Decoder(pool, (count / 3) + (2 < (count % 3)))
         };
+        #endif
         uint8_t* pixels = img.as<uint8_t>();
         uint16_t* pixels16 = img.as<uint16_t>();
         bool is_16bit = img.bits_per_channel > 8;
@@ -306,14 +324,14 @@ namespace llcomp
                 r += g;
                 b += g;
                 if (is_16bit) {
-                    pixels16[0] = std::clamp( r, 0, clamp);
-                    pixels16[1] = std::clamp( g, 0, clamp);
-                    pixels16[2] = std::clamp( b, 0, clamp);
+                    pixels16[0] = r;
+                    pixels16[1] = g;
+                    pixels16[2] = b;
                     pixels16 += 3;
                 } else {
-                    pixels[0] = std::clamp( r, 0, clamp);
-                    pixels[1] = std::clamp( g, 0, clamp);
-                    pixels[2] = std::clamp( b, 0, clamp);
+                    pixels[0] = r;
+                    pixels[1] = g;
+                    pixels[2] = b;
                     pixels += 3;
                 }
             }
@@ -348,9 +366,9 @@ namespace llcomp
 
     }
 
-    RawImage decompressImage(const uint64_t *begin, const uint64_t *end)
+    RawImage decompressImage(std::vector<uint64_t> & poolvec)
     {
-        return rlgr_decode(begin,end);
+        return rlgr_decode(poolvec);
     }
 
 }

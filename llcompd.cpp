@@ -27,7 +27,7 @@ int main(int argc, char** argv) {
     inFile.read(reinterpret_cast<char*>(compressed.data()), size * sizeof(uint64_t));
     inFile.close();
     try {
-        auto rawImage = llcomp::decompressImage(compressed.data(), compressed.data()+compressed.size() );
+        auto rawImage = llcomp::decompressImage(compressed);
         execute_time.stop();
         rawImage.save(std::string(filename) + ".ppm");
 

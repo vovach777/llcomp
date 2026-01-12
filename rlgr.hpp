@@ -286,4 +286,104 @@ namespace RLGR {
         }
     };
 }
+
+    
+    
+    
+namespace RLGR::Simple {
+    
+    inline void adapt_k(uint32_t value, uint32_t &k) {
+        if (value == 0) {
+            k = 0;
+            return;
+        }
+        uint32_t value_of_k = k < 4? k*2 : ((1 << (k+1))); //TODO: tune k=2,3
+        k = std20::bit_width((value * 4 + value + value_of_k) / 8);
+ 
+    }
+    
+    constexpr bool RLMode = true;
+    
+    class Encoder {
+        uint32_t rl=0;
+        uint32_t kd=2;
+        uint32_t kz=2;
+        uint32_t kt=2;
+        BitStream::Writer s;
+        public:
+        Encoder(PagePool& pool) : s(pool) {}
+
+        void put(uint32_t v) {
+            if constexpr (RLMode) {
+                if (kd == 0) {   
+                    if (rl==0)   
+                        s.reserve(128);          
+                    if (v == 0) {
+                        rl+=1;
+                        return;
+                    }
+                    Rice::write(rl,kz,s);
+                    adapt_k(rl,kz);
+                    Rice::write(v,kt,s);
+                    adapt_k(v,kt);
+                    kd = kt;
+                    rl = 0;
+                    return;
+                }
+            }
+            s.reserve(64);
+            Rice::write(v,kd,s);
+            adapt_k(v,kd);
+        }
+    
+        void flush() {
+            if (rl > 0) {
+                Rice::write(rl-1,kz,s);
+                Rice::write(0,kt,s);
+            }
+            s.flush();
+        }
+    };
+    
+    
+    class Decoder {
+        uint32_t rl{0};
+        uint32_t kd=2;
+        uint32_t kz=2;
+        uint32_t kt=2;
+
+        uint32_t val=0;
+        BitStream::Reader s;
+        public:
+        Decoder(const PagePool& pool) : s(pool) {}
+
+        uint32_t get() {
+    
+            if constexpr (RLMode) {
+                if (rl > 0) {
+                    rl--;
+                    return (rl == 0) ? val : 0;                                    
+                }
+                if (kd == 0) {
+                    s.reserve(128);
+                    rl = Rice::read(kz,s);
+                    adapt_k(rl,kz);
+                    val =  Rice::read(kt,s);
+                    adapt_k(val,kt);
+                    kd = kt;
+                    if (rl == 0) {
+                        return val;
+                    }
+                    return 0;
+                }
+            }
+            s.reserve(64);
+            auto v = Rice::read(kd,s);
+            adapt_k(v,kd);
+            return v;
+        }
+    
+    };
+}
+    
     
