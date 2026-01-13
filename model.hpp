@@ -49,7 +49,7 @@ struct NodeCounter {
             // Суммируем байты через умножение
             constexpr uint64_t MUL = 0x0101010101010101ULL;
             uint64_t t = x * MUL;
-            return static_cast<uint8_t>(t >> 56);           
+            return static_cast<uint8_t>(t >> 56);
         }
         int unique() const {
             return __builtin_popcountll(count & 0x1111111111111111ULL * 0xFULL);
@@ -66,15 +66,15 @@ struct NodeCounter {
             count &= ~(0xFULL << (symbol*4));
         }
 
-        void update(int symbol) {            
+        void update(int symbol) {
             // Получаем текущее значение (0..15)
             int val = (count >> (symbol * 4)) & 0xF;
             if (val == 15) {
                 // Масштабирование: делим все на 2 (сброс старшего бита каждого нимбла)
                 // 15 (1111) -> 7 (0111). После инкремента станет 8.
                 count = (count >> 1) & 0x7777777777777777ULL;
-            }            
-            // Безусловный инкремент. 
+            }
+            // Безусловный инкремент.
             count +=  1ULL << (symbol * 4);
         }
 
@@ -96,7 +96,7 @@ struct NodeCounter {
         int decode_ac(AC && ac) const {
             auto count_copy = *this;
             int ctx=0;
-            while (count_copy.count) {                
+            while (count_copy.count) {
                 bool esc = ac.get(ctx++);
                 auto symbol_predict = count_copy.max_element();
                 if (!esc) {
@@ -109,7 +109,7 @@ struct NodeCounter {
 
         int max_element() const {
             // 1. Загружаем count (исправил имя переменной)
-            if ( count == 0) {             
+            if ( count == 0) {
                 return 0;
             }
             __m128i v = _mm_cvtsi64_si128(count);
@@ -121,11 +121,11 @@ struct NodeCounter {
 
             // Редукция максимума
             __m128i max_val = bytes;
-            max_val = _mm_max_epu8(max_val, _mm_srli_si128(max_val, 8)); 
-            max_val = _mm_max_epu8(max_val, _mm_srli_si128(max_val, 4)); 
-            max_val = _mm_max_epu8(max_val, _mm_srli_si128(max_val, 2)); 
-            max_val = _mm_max_epu8(max_val, _mm_srli_si128(max_val, 1)); 
-            
+            max_val = _mm_max_epu8(max_val, _mm_srli_si128(max_val, 8));
+            max_val = _mm_max_epu8(max_val, _mm_srli_si128(max_val, 4));
+            max_val = _mm_max_epu8(max_val, _mm_srli_si128(max_val, 2));
+            max_val = _mm_max_epu8(max_val, _mm_srli_si128(max_val, 1));
+
             uint8_t m = _mm_extract_epi8(max_val, 0);
             __m128i cmp = _mm_cmpeq_epi8(bytes, _mm_set1_epi8(m));
             int mask_res = _mm_movemask_epi8(cmp);
@@ -160,16 +160,20 @@ struct NodeCounter {
         return 1ULL << max_nodes_lg2;
     }
 
+    void model_park() {
+        state = 0;
+    }
+
     void reset_model()
     {
         is_empty_flag = true;
         nodes_counter.clear();
         nodes_counter.resize( 1ULL << max_nodes_lg2 );
         nodes_next.clear();
-        nodes_next.resize( 1ULL << max_nodes_lg2 );        
+        nodes_next.resize( 1ULL << max_nodes_lg2 );
         nodes_count = 0;
         auto state0 = nodes_count++;
-        auto state1 = nodes_count++;        
+        auto state1 = nodes_count++;
         nodes_counter[state0].count = 0;
         std::fill(nodes_next[state0].next_offs, nodes_next[state0].next_offs + N, state1 );
         nodes_counter[state1].count = 0;
@@ -237,7 +241,7 @@ struct NodeCounter {
                     new_counter.set_at(i,scaled);
                     assert( src_counter >= scaled );
                     nodes_counter[next_b].set_at(i,remainder );
-                }                            
+                }
                 nodes_next[state].next_offs[b] = new_;
             }
         }
@@ -249,7 +253,7 @@ struct NodeCounter {
         //Доверяем модели, если средняя повторяемость символа >= 2
         auto t = get_total();
         auto u = get_unique();
-        return (t >= (u << 1)) && (t >= threshold) && (nodes_count > 32);
+        return (t >= (u << 1)) && (t >= threshold) && (nodes_count > 8);
     }
 private:
     std::vector<NodeCounter> nodes_counter;
@@ -257,11 +261,11 @@ private:
     uint32_t state;
     size_t nodes_count{0};
     std::optional<int> cached_k{};
-    
+
     bool is_empty_flag{true};
 };
 
-using ModelK = DMCModel<16,true,2,2,14>;
+using ModelK = DMCModel<16,false,2,2,12>;
 
 
 

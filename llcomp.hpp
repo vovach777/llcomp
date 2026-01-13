@@ -67,7 +67,12 @@ namespace llcomp
     {
         const auto width = hdr.width;
         const auto height = hdr.height;
-        std::vector<std::vector<std::vector<int>>> line(2, std::vector<std::vector<int>>(3, std::vector<int>(width, 0)));
+        //std::vector<std::vector<std::vector<int>>> line(2, std::vector<std::vector<int>>(3, std::vector<int>(width, 0)));
+        std::vector<int> lines = std::vector<int>(2*3*width);
+        int* line[2][3] = {
+                            { lines.data(),         lines.data()+width,    lines.data()+width*2},
+                            { lines.data()+width*3, lines.data()+width*4,  lines.data()+width*5}
+                        };
 
         PagePool out_pool;
         out_pool.reserve(hdr.width*hdr.height);
@@ -88,10 +93,10 @@ namespace llcomp
             RLGR::Encoder(out_pool)
         };
 #endif
-        
+
         // uint16_t Rshift = std::max(0, hdr.channels_depth - 8);
         // uint16_t Rmask = (1 << Rshift) - 1;
-  
+
 
         for (uint32_t h = 0; h < height; ++h) {
             for (uint32_t w = 0; w < width; ++w) {
@@ -107,20 +112,28 @@ namespace llcomp
                     b -= g;
                     r -= g;
                     g += (b + r) / 4;
-
+                    #pragma unroll(3)
                     for (int i = 0; i < 3; ++i) {
                         const int l = w > 0 ? line[h & 1][i][w - 1] : h > 0 ? line[(h - 1) & 1][i][w] : 0;
                         const int t = h > 0 ? line[(h-1)&1][i][w] : l;
                         const int tl = h > 0 && w > 0 ? line[(h-1)&1][i][w-1] : t;
                         const int predict = median(l, l + t - tl, t);
+                        #ifdef ONE_CODER
+                           encoder.put( Rice::to_unsigned( line[h&1][i][w] - predict));
+                        #else
                         encoders[i].put( Rice::to_unsigned( line[h&1][i][w] - predict));
-                  
+                        #endif
+
                     }
             }
         }
+#ifdef ONE_CODER
+        encoder.flush();
+#else
         for (int i = 0; i < 3; ++i) {
             encoders[i].flush();
         }
+#endif
         return out_pool.move();
     }
 
@@ -269,12 +282,15 @@ namespace llcomp
     {
         size_t rgb_pos = 0;
         Header hdr;
+        PagePool pool(std::move(poolvec));
+        auto hdri = pool.get_next_read_page(); pool.get_next_read_page();
+
         RawImage img;
-       
+
         PagePool pool(std::move(poolvec));
         pool.get_next_read_page(); //пропускаем заголовок
         pool.get_next_read_page();
-    
+
         std::memcpy(&hdr, &(pool[0]), sizeof(Header));
         if (!hdr.check()) {
             throw std::runtime_error("Header CRC check failed");
@@ -289,24 +305,32 @@ namespace llcomp
         auto height = img.height;
         size_t count = size_t(width) * height * 3;
         using Stream = BitStream::Reader;
-        #ifdef USE_SIMPLE_RLGR
-        std::array<RLGR::Simple::Decoder,3> decoders{
-            RLGR::Simple::Decoder(pool),
-            RLGR::Simple::Decoder(pool),
-            RLGR::Simple::Decoder(pool)
-        };
-        #else
+#ifdef USE_SIMPLE_RLGR
+        using Decoder = RLGR::Simple::Decoder;
+#else
+        using Decoder = RLGR::Decoder;
+#endif
+
+#ifdef ONE_CODER
+        Decoder decoder(pool ,count);
+#else
         std::array<RLGR::Decoder,3> decoders{
-            RLGR::Decoder(pool, (count / 3) + (0 < (count % 3))),
-            RLGR::Decoder(pool, (count / 3) + (1 < (count % 3))),
-            RLGR::Decoder(pool, (count / 3) + (2 < (count % 3)))
+            Decoder(pool, (count / 3) + (0 < (count % 3))),
+            Decoder(pool, (count / 3) + (1 < (count % 3))),
+            Decoder(pool, (count / 3) + (2 < (count % 3)))
         };
-        #endif
+#endif
         uint8_t* pixels = img.as<uint8_t>();
         uint16_t* pixels16 = img.as<uint16_t>();
         bool is_16bit = img.bits_per_channel > 8;
         int clamp = (1 << img.bits_per_channel)-1;
-        std::vector<std::vector<std::vector<int>>> line(2, std::vector<std::vector<int>>(3, std::vector<int>(width, 0)));
+        //std::vector<std::vector<std::vector<int>>> line(2, std::vector<std::vector<int>>(3, std::vector<int>(width, 0)));
+        std::vector<int> lines = std::vector<int>(2*3*width);
+        int* line[2][3] = {
+                            { lines.data(),         lines.data()+width,    lines.data()+width*2},
+                            { lines.data()+width*3, lines.data()+width*4,  lines.data()+width*5}
+                        };
+
         for (uint32_t h = 0; h < height; ++h)
         {
             for (uint32_t w = 0; w < width; ++w)
@@ -315,7 +339,11 @@ namespace llcomp
                     const int l = w > 0 ? line[h & 1][i][w - 1] : h > 0 ? line[(h - 1) & 1][i][w] : 0;
                     const int t = h > 0 ? line[(h-1)&1][i][w] : l;
                     const int tl = h > 0 && w > 0 ? line[(h-1)&1][i][w-1] : t;
+                    #ifdef ONE_CODER
+                    line[h & 1][i][w] = Rice::to_signed( decoder.get() ) + median(l, l + t - tl, t);
+                    #else
                     line[h & 1][i][w] = Rice::to_signed( decoders[i].get() ) + median(l, l + t - tl, t);
+                    #endif
                 }
                 int r = line[h & 1][0][w];
                 int g = line[h & 1][1][w];
@@ -366,7 +394,7 @@ namespace llcomp
 
     }
 
-    RawImage decompressImage(std::vector<uint64_t> & poolvec)
+    RawImage decompressImage(std::vector<uint64_t>& poolvec)
     {
         return rlgr_decode(poolvec);
     }
