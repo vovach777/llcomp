@@ -282,9 +282,6 @@ namespace llcomp
     {
         size_t rgb_pos = 0;
         Header hdr;
-        PagePool pool(std::move(poolvec));
-        auto hdri = pool.get_next_read_page(); pool.get_next_read_page();
-
         RawImage img;
 
         PagePool pool(std::move(poolvec));
