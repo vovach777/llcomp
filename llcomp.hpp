@@ -23,7 +23,7 @@
 #include "pool.hpp"
 #include "bitstream.hpp"
 #include "rlgr.hpp"
-//#define USE_SIMPLE_RLGR
+#define USE_SIMPLE_RLGR
 
 namespace llcomp
 {
@@ -311,7 +311,7 @@ namespace llcomp
 #ifdef ONE_CODER
         Decoder decoder(pool ,count);
 #else
-        std::array<RLGR::Decoder,3> decoders{
+        std::array<Decoder,3> decoders{
             Decoder(pool, (count / 3) + (0 < (count % 3))),
             Decoder(pool, (count / 3) + (1 < (count % 3))),
             Decoder(pool, (count / 3) + (2 < (count % 3)))
