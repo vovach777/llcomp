@@ -287,7 +287,7 @@ namespace llcomp
 
     };
 
-    inline auto rlgr_decode(std::vector<uint64_t> & poolvec)
+    inline auto rlgr_decode(std::vector<Chunk32> & poolvec)
     {
         size_t rgb_pos = 0;
         Header hdr;
@@ -416,7 +416,7 @@ namespace llcomp
 
     }
 
-    inline RawImage decompressImage(std::vector<uint64_t>& poolvec)
+    inline RawImage decompressImage(std::vector<Chunk32>& poolvec)
     {
         return rlgr_decode(poolvec);
     }

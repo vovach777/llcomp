@@ -5,6 +5,7 @@
 #include <vector>
 #include "llcomp.hpp"
 #include "profiling.hpp"
+#include "pool.hpp"
 
 int main(int argc, char** argv) {
     profiling::StopWatch execute_time;
@@ -15,12 +16,12 @@ int main(int argc, char** argv) {
     }
     try {
     const char* filename = argv[1];
-    std::vector<uint64_t> compressed;
+    std::vector<Chunk32> compressed;
     llcomp::RawImage img;
     img.load(std::string(filename));
     img.le();
     execute_time.startnew();
-    compressed = llcomp::compressImage(img );
+    compressed = llcomp::compressImage(img);
 
     std::string outputFile = std::string(filename) + llcomp::ext;
     std::ofstream outFile(outputFile, std::ios::binary);
@@ -28,7 +29,7 @@ int main(int argc, char** argv) {
         std::cerr << "Error opening output file: " << outputFile << std::endl;
         return 1;
     }
-    outFile.write(reinterpret_cast<const char*>(compressed.data()), compressed.size()*sizeof(uint64_t));
+    outFile.write(reinterpret_cast<const char*>(compressed.data()), compressed.size()*sizeof(Chunk32));
     outFile.close();
     } catch (const std::exception& e) {
         std::cerr << "Error decompressing image: " << e.what() << std::endl;

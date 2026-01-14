@@ -16,6 +16,7 @@ namespace BitStream {
     struct Writer {
         uint64_t buf{0};
         uint32_t left{64};
+        uint32_t idx{0};
         PagePool& pool;
         RingArray<size_t,4> res;
 
@@ -25,7 +26,7 @@ namespace BitStream {
         inline int left_reserved() const {
             // if (res.size() == 0)
             //     return 0;
-            return static_cast<int>(res.size())*64+static_cast<int>(left) - 64;
+            return static_cast<int>(res.size())*256+static_cast<int>(left) - 64 - idx*64;
         }
 
         inline int reserved_total() const {
@@ -56,7 +57,11 @@ namespace BitStream {
             buf <<= left;
             buf |= static_cast<uint64_t>(value) >> rem;
             assert(res.size() > 0);
-            pool[ res.get() ] = (buf);
+            pool[ res.peek() ][idx++] = (buf);
+            if ( idx == 4) {
+                idx = 0;
+                res.get();
+            }
             left += 64 - n;
             buf = value; //it's ok that have extra MSB rem bits.. it's cuts on flush later
         }
@@ -72,7 +77,7 @@ namespace BitStream {
         if (left < 64) {
             buf <<= left;
             assert(res.size() > 0);
-            pool[ res.get() ] = (buf);
+            pool[ res.peek() ][idx] = buf;
             buf = 0;
             left = 64;
         }
@@ -86,13 +91,14 @@ namespace BitStream {
         uint32_t buf32{0};
         uint32_t bits_valid_64{0}; // number of bits left in bits field
         int32_t bits_valid{0};
+        uint32_t idx{0};
         const PagePool& pool;
-        RingArray<size_t,4> res;
+        RingArray<Chunk32,4> res;
         Reader(const PagePool& pool) : pool(pool) {}
 
         inline int valid_reserved() const {
 
-            return bits_valid + (res.size())*64;
+            return bits_valid + (res.size())*256 - idx*64;
         }
 
         inline  int reserved_total() const {
@@ -103,7 +109,7 @@ namespace BitStream {
             bool glue_operation = bits_valid < 32;
 
             while (valid_reserved() < count)  {
-               res.put( pool.get_next_read_page() );
+               res.put( pool.get_next_chunk() );
             }
             if (glue_operation && res.size() > 0) {
                 // if (res.size() == 0) {
@@ -116,14 +122,21 @@ namespace BitStream {
                 //std::cout << " take = " << take << std::endl;
                 assert(take > 0);
                 bits_valid += 64;
-
-                buf64 = (pool[ res.get() ]);
+                featch64();
                 bits_valid_64 = 64-take;
                 buf32 |= static_cast<uint32_t>(buf64 >> (64-take));
                 buf64 <<= take;
 
             }
 
+        }
+
+        inline void featch64() {
+                buf64 = res.peek()[idx++];
+                if (idx==4) {
+                    idx=0;
+                    res.get();
+                }
         }
 
         inline void skip(uint32_t n)
@@ -150,7 +163,7 @@ namespace BitStream {
                         //std::cout << "bits_valid " << bits_valid << std::endl;
                         return;
                     } else {
-                        buf64 = (pool[ res.get() ]);
+                        featch64();
                         bits_valid_64 = 64;
                         bits_valid += 64;
                     }
