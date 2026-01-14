@@ -8,12 +8,11 @@
 #include "bitstream.hpp"
 #include "rice.hpp"
 //#define USE_MODEL_K
-
 namespace RLGR {
     constexpr uint32_t MAX_K = 240;
-    constexpr uint32_t UP_K = 4;
-    constexpr uint32_t DOWN_K = 6;
-    constexpr uint32_t UP_K_DIRECT_RL = 3;
+    constexpr uint32_t UP_K = 5;   //original: 4
+    constexpr uint32_t DOWN_K = 9; //original: 6
+    constexpr uint32_t UP_K_DIRECT_RL = 2; //original: 3
     constexpr uint32_t DOWN_K_DIRECT_RL = 3;
     //constexpr uint32_t UP_K_RICE = 2;
     constexpr uint32_t DOWN_K_RICE = 2;
@@ -51,7 +50,7 @@ namespace RLGR {
 
         // }
 
-        void put(uint32_t v) {
+        inline void put(uint32_t v) {
 
             uint32_t k_ = k >> 3;
             uint32_t kr_ = kr >> 3;
@@ -143,6 +142,15 @@ namespace RLGR {
             }
         }
 
+        void new_line() {
+            if (rl > 0) {
+                uint32_t k_ = k>>3;
+                assert(k_ > 0);
+                s.put_bits(1,1);
+                s.put_bits(k_,rl);
+            }
+        }
+
         void flush() {
             if (rl > 0) {
                 uint32_t k_ = k>>3;
@@ -168,11 +176,11 @@ namespace RLGR {
         BitStream::Reader s;
 
 
-        void reserve(int res) {
+        inline void reserve(int res) {
             s.reserve(res);
         }
 
-        uint32_t readRL(bool terminator = false) {
+        inline uint32_t readRL(bool terminator = false) {
             uint32_t kr_ = kr >> 3;
             uint32_t kr__ = kr_;
     #ifdef USE_MODEL_K
@@ -196,12 +204,12 @@ namespace RLGR {
         }
 
         // Логика завершения частичной серии (бывшая метка rl_0)
-        uint32_t finish_partial_run() {
+        inline uint32_t finish_partial_run() {
             reserve(64);
             k -= k > DOWN_K ? DOWN_K : k;
             auto t = readRL(true);
             run_mode = false;
-            stream_size--;
+            //stream_size--;
             return t;
         }
 
@@ -219,7 +227,7 @@ namespace RLGR {
                     reserve(1 + k_);
                     run_mode = false;
                 }
-                stream_size--;
+                //stream_size--;
                 return 0;
             } else {
                 // Частичная серия
@@ -243,16 +251,23 @@ namespace RLGR {
             } else {
                 k -= k > DOWN_K_DIRECT_RL ? DOWN_K_DIRECT_RL : k;
             }
-            stream_size--;
+            //stream_size--;
             return v;
         }
 
     public:
-        size_t stream_size{0};
+        //size_t stream_size{0};
 
         Decoder(const  PagePool &pool, size_t stream_size = size_t(-1))
-            : s(pool), stream_size(stream_size) {
+            : s(pool) {
         }
+
+        void park() {
+            #ifdef USE_MODEL_K
+               model.model_park();
+            #endif
+        }
+
 
         uint32_t get() {
             // 1. Если уже в режиме серии - продолжаем (аналог прямого перехода на rl_entry)
@@ -303,21 +318,33 @@ namespace RLGR {
             // 3. Прямое чтение (k=0)
             return read_direct();
         }
+
+        inline void new_line() {
+            run_mode = false;
+        }
     };
 }
 
 namespace RLGR::Simple {
 
-    inline void adapt_k(uint32_t value, uint32_t &k) {
-        if (value == 0) {
-            k = 0;
-            return;
-        }
-        uint32_t value_of_k = k < 4? k*2 : ((1 << (k+1))); //TODO: tune k=2,3
-        k = std20::bit_width((value * 4 + value + value_of_k) / 8);
-
-    }
-
+    // inline void adapt_k(uint32_t value, uint32_t &k) {
+    //     auto new_k = std20::bit_width(value);
+    //     if (k == new_k)
+    //         return;
+    //     if (new_k == 0) {
+    //         k = 0;
+    //         return;
+    //     }
+    //     k = (k + new_k) / 2;
+    // }
+inline void adapt_k(uint32_t value, uint32_t &k) {
+    auto new_k = std20::bit_width(value);
+    // Вычисляем среднее безусловно
+    uint32_t avg_k = (k + new_k) >> 1;
+    // Если new_k == 0, результат 0, иначе среднее.
+    // Это компилируется в CMOV (conditional move)
+    k = (new_k == 0) ? 0 : avg_k;
+}
     constexpr bool RLMode = true;
 
     class Encoder {
@@ -329,7 +356,7 @@ namespace RLGR::Simple {
         public:
         Encoder(PagePool& pool) : s(pool) {}
 
-        void put(uint32_t v) {
+        inline void put(uint32_t v) {
             if constexpr (RLMode) {
                 if (kd == 0) {
                     if (rl==0)
@@ -373,7 +400,7 @@ namespace RLGR::Simple {
         public:
         Decoder(const PagePool& pool, size_t dummy_size) : s(pool) {}
 
-        uint32_t get() {
+        inline uint32_t get() {
 
             if constexpr (RLMode) {
                 if (rl > 0) {
