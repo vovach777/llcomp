@@ -4,6 +4,7 @@ import glob
 import shutil
 import time
 import sys
+import random
 
 def read_ppm_p6(filename):
     """Reads a P6 PPM file, returns header info and pixel data, handling comments."""
@@ -85,6 +86,8 @@ def compare_ppm(file1, file2):
 
 # Parse arguments
 time_limit = None
+shuffle_files = False
+file_limit = None
 for arg in sys.argv:
     if arg.startswith("-t"):
         try:
@@ -92,6 +95,15 @@ for arg in sys.argv:
             print(f"Time limit set to: {time_limit} seconds")
         except ValueError:
             print(f"Invalid time limit format: {arg}")
+    elif arg.startswith("-n"):
+        try:
+            file_limit = int(arg[2:])
+            print(f"File limit set to: {file_limit}")
+        except ValueError:
+            print(f"Invalid file limit format: {arg}")
+    elif arg == "-p":
+        shuffle_files = True
+        print("Shuffling files enabled.")
 
 # Пути
 COMPRESSOR = "build/llrice-c"
@@ -106,7 +118,14 @@ print(f"|{'-'*37}|{'-'*17}|{'-'*17}|{'-'*8}|{'-'*17}|{'-'*8}|{'-'*17}|{'-'*8}|{'
 files = []
 for path in SEARCH_PATHS:
     files.extend(glob.glob(path))
-files.sort()
+
+if shuffle_files:
+    random.shuffle(files)
+else:
+    files.sort()
+
+if file_limit is not None:
+    files = files[:file_limit]
 
 total_ppm = 0
 total_llr = 0
@@ -142,8 +161,9 @@ for ppm_file in files:
     file_root = os.path.splitext(base_name)[0]
 
     llr_file = ppm_file + ".llr"
-    # Декомпрессор сохраняет как <input_filename>.ppm
-    expected_output = llr_file + ".ppm"
+    # Декомпрессор сохраняет как <input_filename>.ppm или как указано.
+    # Мы явно указываем output: image.pnm.llr.pnm
+    expected_output = llr_file + ".pnm"
 
     # Очистка перед тестом
     if os.path.exists(llr_file): os.remove(llr_file)
@@ -171,10 +191,10 @@ for ppm_file in files:
         print(f"| {display_name:<35} | {'EXCEPT (C)':<15} | {str(e):<15} |")
         continue
 
-    # 2. Распаковка (аргумент только один!)
+    # 2. Распаковка (теперь два аргумента)
     try:
         t0 = time.time()
-        res = subprocess.run([DECOMPRESSOR, llr_file], capture_output=True, text=True)
+        res = subprocess.run([DECOMPRESSOR, llr_file, expected_output], capture_output=True, text=True)
         t1 = time.time()
         if res.returncode != 0:
             print(f"| {display_name:<35} | {'ERROR (D)':<15} | {'-':<15} | {'-':<6} | {'-':<15} | {'-':<6} | {'-':<15} | {'-':<6} | {str(res.returncode):<10} |")

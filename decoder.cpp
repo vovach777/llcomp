@@ -5,17 +5,20 @@
 #include <vector>
 #include <stdexcept>
 #include <cstdint>
-#include "llcomp.hpp"
+#include "llrice.hpp"
 #include "profiling.hpp"
 
 int main(int argc, char** argv) {
     profiling::StopWatch execute_time;
-    execute_time.startnew();
-    if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <image_path>" << std::endl;
-        return 1;
+    if (argc < 3) {
+        std::cout << "LLR - Simple solution good compression" << std::endl;
+        std::cout << "LLRice is streming frendly intraframe lossless image compressor." << std::endl;
+        std::cout << "Only LLR file type is supported for input!" << std::endl;
+        std::cout << "Please use this format: \"" << "llrice-d" << " input_file output_file\"" << std::endl;
+        return 0;
     }
     const char* filename = argv[1];
+    const char* outputFilename = argv[2];
     std::ifstream inFile(filename, std::ios::binary);
     if (!inFile) {
         std::cerr << "Error opening input file: " << filename << std::endl;
@@ -27,9 +30,10 @@ int main(int argc, char** argv) {
     inFile.read(reinterpret_cast<char*>(compressed.data()), size * sizeof(uint64_t));
     inFile.close();
     try {
-        auto rawImage = llcomp::decompressImage(compressed);
+        execute_time.startnew();
+        auto rawImage = llrice::decompressImage(compressed);
         execute_time.stop();
-        rawImage.save(std::string(filename) + ".ppm");
+        rawImage.save(std::string(outputFilename));
 
     } catch (const std::exception& e) {
         std::cerr << "Error decompressing image: " << e.what() << std::endl;
@@ -39,6 +43,6 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    std::cout << "time: " << execute_time.elapsed_str() << std::endl;
+    //std::cout << "time: " << execute_time.elapsed_str() << std::endl;
     return 0;
 }

@@ -26,7 +26,7 @@
 #include "rlgr.hpp"
 //#define USE_SIMPLE_RLGR
 //#define ONE_CODER
-namespace llcomp
+namespace llrice
 {
     constexpr inline auto ext = ".llr";
     constexpr inline uint8_t rev = '1';
@@ -252,7 +252,7 @@ namespace llcomp
             in.read(reinterpret_cast<char*>(data.get()),size);
         }
         inline void save( const std::string& filename ) {
-            using ChannelType = llcomp::RawImage::ChannelType;
+            using ChannelType = llrice::RawImage::ChannelType;
 
             if (channel_nb != 3) {
                 throw std::runtime_error("channel_nb != 3");
