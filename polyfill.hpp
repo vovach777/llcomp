@@ -46,3 +46,21 @@ namespace std20 {
             return (x << 8) | (x >> 8);
         #endif
     }
+
+#if defined(__GNUC__) || defined(__clang__)
+    #define likely(x)       __builtin_expect(!!(x), 1)
+    #define unlikely(x)     __builtin_expect(!!(x), 0)
+#else
+    // Для MSVC или других компиляторов, которые это не поддерживают
+    #define likely(x)       (x)
+    #define unlikely(x)     (x)
+#endif
+
+// // Подсказки для предсказателя переходов (Branch Predictor)
+// #if defined(__GNUC__) || defined(__clang__)
+//     #define LIKELY(x) __builtin_expect(!!(x), 1)
+//     #define UNLIKELY(x) __builtin_expect(!!(x), 0)
+// #else
+//     #define LIKELY(x) (x)
+//     #define UNLIKELY(x) (x)
+// #endif

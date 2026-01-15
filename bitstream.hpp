@@ -18,24 +18,16 @@ namespace BitStream {
         uint32_t left{64};
         PagePool& pool;
         RingArray<size_t,4> res;
+        int _left_reserved{0};
 
         Writer(PagePool& pool) : pool(pool) {}
 
 
-        inline int left_reserved() const {
-            // if (res.size() == 0)
-            //     return 0;
-            return static_cast<int>(res.size())*64+static_cast<int>(left) - 64;
-        }
-
-        inline int reserved_total() const {
-            return left_reserved();
-        }
-
         void reserve(int count) {
             //count = std::max(count,32);
-            while (left_reserved() < count) {
+            while (_left_reserved < count) {
                 res.put( pool.acquire_page() );
+                _left_reserved += 64;
             }
         }
 
@@ -43,13 +35,14 @@ namespace BitStream {
     {
         if (n == 0)
             return;
-        assert(n <= left_reserved());
+        assert(n <= _left_reserved);
         assert(n <= 32);
         assert( (n == 32) || (value >> n) == 0 );
         if (n <= left) {
             buf <<= n;
             buf |= value;
             left -= n;
+            _left_reserved -= n;
         } else {
             assert(left < 32);
             auto rem = n - left;
@@ -57,6 +50,7 @@ namespace BitStream {
             buf |= static_cast<uint64_t>(value) >> rem;
             assert(res.size() > 0);
             pool[ res.get() ] = (buf);
+            _left_reserved -= n;
             left += 64 - n;
             buf = value; //it's ok that have extra MSB rem bits.. it's cuts on flush later
         }
@@ -79,107 +73,92 @@ namespace BitStream {
     }
 
     };
-
-    struct Reader
+    struct alignas(32) Reader
     {
         uint64_t buf64{0}; // stores bits read from the buffer
         uint32_t buf32{0};
         uint32_t bits_valid_64{0}; // number of bits left in bits field
-        int32_t bits_valid{0};
+        int32_t total_buffered{0};  // cnt32 + cnt64 + res.size()*64
+        RingArray<uint64_t,4> res;
         const PagePool& pool;
-        RingArray<size_t,4> res;
         Reader(const PagePool& pool) : pool(pool) {}
 
-        inline int valid_reserved() const {
-
-            return bits_valid + (res.size())*64;
-        }
-
-        inline  int reserved_total() const {
-            return valid_reserved();
-        }
-
         inline void reserve(uint32_t count) {
-            bool glue_operation = bits_valid < 32;
+            auto glue_operation_if_below_32 = total_buffered;
 
-            while (valid_reserved() < count)  {
+            while (total_buffered < count)  {
                res.put( pool.get_next_read_page() );
+               total_buffered += 64;
             }
-            if (glue_operation && res.size() > 0) {
+            if (glue_operation_if_below_32 < 32 && res.size() > 0) {
                 // if (res.size() == 0) {
                 //     std::cout << "warning res.size()=0 has hole: bits_valid=" << bits_valid << " on_reserve=" << count << std::endl;
                 //     return;
                 // }
                 //assert(res.size() > 0);
                 assert(bits_valid_64 == 0);
-                auto take = 32-bits_valid;
+                auto take = 32-glue_operation_if_below_32;
                 //std::cout << " take = " << take << std::endl;
                 assert(take > 0);
-                bits_valid += 64;
 
-                buf64 = (pool[ res.get() ]);
+                buf64 = res.get();
                 bits_valid_64 = 64-take;
                 buf32 |= static_cast<uint32_t>(buf64 >> (64-take));
                 buf64 <<= take;
-
             }
 
         }
 
         inline void skip(uint32_t n)
         {
+            if (likely( n == 0)) return;
             assert(n <= 32);
-            assert(bits_valid >= n);
-            //std::cerr << "skip " << n << " " << peek_n(n) << std::endl;
-
-            while (n > 0) {
-                if (bits_valid_64 == 0) {
-                    if ( res.size() == 0) {
-                        assert(bits_valid >= n);
-
-                        if (n == 32) {
-                            buf32 = 0;
-                            bits_valid -= 32;
-                            assert(bits_valid == 0);
-                            return;
-
-                        }
-                        assert(n < 32);
-                        buf32 <<= n;
-                        bits_valid -= n;
-                        //std::cout << "bits_valid " << bits_valid << std::endl;
-                        return;
-                    } else {
-                        buf64 = (pool[ res.get() ]);
-                        bits_valid_64 = 64;
-                        bits_valid += 64;
-                    }
+            assert(total_buffered >= n);
+            if (likely( n <= bits_valid_64)) {
+                total_buffered -= n;
+                if (likely(n == 32)){
+                    buf32 = static_cast<uint32_t>(buf64 >> 32);
+                    buf64 <<= 32;
+                    bits_valid_64 -= 32;
+                }else {
+                    buf32 <<= n;
+                    buf32 |= static_cast<uint32_t>(buf64 >> (64 - n));
+                    buf64 <<= n;
+                    bits_valid_64 -= n;
                 }
-                uint32_t take = std::min(n, bits_valid_64);
-                buf32 = (take == 32) ? static_cast<uint32_t>(buf64 >> 32) : (buf32 << take | static_cast<uint32_t>(buf64 >> (64 - take)));
-                buf64 <<= take;
-                bits_valid_64 -= take;
-                n -= take;
-                bits_valid -= take;
-                //pos += take;
+                return;
             }
-            //assert(bits_valid >= 32);
-            // if (bits_valid < 32) {
-            //     std::cout << "warn!! bits_valid < 32: " << bits_valid << " bits_valid_64=" << bits_valid_64 << std::endl;
-            // }
 
+            if (bits_valid_64 > 0) {
+                const uint32_t rem{bits_valid_64};
+                bits_valid_64 = 0;
+                buf32 <<= rem;
+                buf32 |= static_cast<uint32_t>(buf64 >> (64U - rem));
+                n -= rem;
+                total_buffered -= rem;
+
+            }
+
+            if ( likely( res.size() == 0) ) {
+                total_buffered -= n;
+                buf32 <<= n;
+                return;
+            }
+            buf64 = res.get();
+            bits_valid_64 = 64;
+            skip(n);
         }
 
         inline uint32_t peek32()
         {
-            assert(bits_valid  >= 32);
+            assert(total_buffered  >= 32);
             return buf32;
         }
         inline uint32_t peek_n(uint32_t n)
         {
             assert(n != 0);
             assert(n <= 32);
-            assert(bits_valid >= n);
+            assert(total_buffered >= n);
             return n == 32 ? buf32 : (buf32 >> (32-n));
         }
     };

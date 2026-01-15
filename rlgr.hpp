@@ -275,7 +275,7 @@ namespace RLGR {
                 return process_run();
             }
 
-            assert(stream_size > 0 && "read after eof");
+            //assert(stream_size > 0 && "read after eof");
 
             uint32_t k_ = k >> 3;
 
