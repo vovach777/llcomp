@@ -79,7 +79,7 @@ For examples of how to use LLRice, please refer to the [examples directory](exam
 
 - **Compiler**: Intel ICX 2025 (Windows).
 - **Build System**: CMake (cross-platform support).
-- **Dependencies**: STB Image library for image loading and saving.
+- **Dependencies**: No.
 
 ## License
 

@@ -5,27 +5,22 @@
 #include <vector>
 #include <array>
 #include <cmath>
-#include <stdexcept>
 #include <cstdint>
-#include <string>
-#include <cstring>
-#include <string_view>
 #include <functional>
 #include <utility>
 #include <type_traits>
-#include <future>
 #include <limits>
-#include <memory>
 #include <type_traits>
-#include <nmmintrin.h>
-#include <sstream>
-#include <fstream>
 #include <tuple>
 #include "pool.hpp"
 #include "bitstream.hpp"
 #include "rlgr.hpp"
+#include "image.hpp"
+
 //#define USE_SIMPLE_RLGR
-//#define ONE_CODER
+#define ONE_CODER
+//#define USE_RLGR3
+#define USE_NEW_LINE
 namespace llrice
 {
     constexpr inline auto ext = ".llr";
@@ -96,7 +91,11 @@ namespace llrice
 #endif
 
     #ifdef ONE_CODER
-            Encoder encoder(out_pool);
+            Encoder g_encoder(out_pool);
+            Encoder rb_encoder(out_pool);
+        #ifdef USE_RLGR3
+            BitStream::Writer r_encoder(out_pool);
+        #endif
     #else
         std::array<Encoder,3> encoders{
             Encoder(out_pool),
@@ -125,9 +124,20 @@ namespace llrice
                     auto v1 = Rice::to_unsigned( g - predict(w+1,h,curr_line, prev_line) );
                     auto v2 = Rice::to_unsigned( b - predict(w+2,h,curr_line, prev_line) );
                     #ifdef ONE_CODER
-                        encoder.put( v0 );
-                        encoder.put( v1 );
-                        encoder.put( v2 );
+                        g_encoder.put( v1 ); //g is luma
+                        #ifdef USE_RLGR3
+                            auto rb = v0 + v2;    //rb is chroma
+                            rb_encoder.put( rb );
+                            if (unlikely(rb != 0)) {
+                                auto k_rem = std20::bit_width( rb );
+                                r_encoder.reserve( k_rem );
+                                r_encoder.put_bits( k_rem, v0 );
+                            }
+                        #else
+                            rb_encoder.put( v0 );
+                            rb_encoder.put( v2 );
+                        #endif
+
                     #else
                         encoders[0].put( v0 );
                         encoders[1].put( v1 );
@@ -135,9 +145,24 @@ namespace llrice
                     #endif
 
             }
+        #ifdef USE_NEW_LINE
+            #ifdef ONE_CODER
+                g_encoder.new_line();
+                rb_encoder.new_line();
+            #else
+                encoders[0].new_line();
+                encoders[1].new_line();
+                encoders[2].new_line();
+            #endif
+        #endif
+
         }
 #ifdef ONE_CODER
-        encoder.flush();
+        g_encoder.flush();
+        rb_encoder.flush();
+    #ifdef USE_RLGR3
+        r_encoder.flush();
+    #endif
 #else
         for (int i = 0; i < 3; ++i) {
             encoders[i].flush();
@@ -147,145 +172,6 @@ namespace llrice
     }
 
 
-    struct RawImage
-    {
-        private:
-        std::unique_ptr<uint16_t[]> data{};
-        public:
-        uint32_t width{};
-        uint32_t height{};
-        uint8_t channel_nb{};
-        uint8_t bits_per_channel{};
-        enum class ChannelType{ none, uint8, uint16, uint16be };
-        ChannelType channel_type{ ChannelType::none };
-
-        void allocate() {
-            if (channel_type != ChannelType::none) {
-                size_t size = width * height * channel_nb;
-
-                if ( channel_type == ChannelType::uint8 )
-                    size = (size + 1) / 2;
-                data = std::make_unique<uint16_t[]>( size );
-            }
-        }
-
-        template<typename T>
-        T* as() {
-            static_assert(std::is_same_v<T, uint8_t> || std::is_same_v<T, uint16_t>,
-                "Unsupported type in RawImage::as()");
-            return reinterpret_cast<T*>(data.get());
-        }
-        template<typename T>
-        const T* as() const {
-            static_assert(std::is_same_v<T, uint8_t> || std::is_same_v<T, uint16_t>,
-                "Unsupported type in RawImage::as()");
-            return reinterpret_cast<const T*>(data.get());
-        }
-
-        static inline auto get_next_line(std::ifstream& in,  bool check_comment = false)
-        {
-            for (;;)
-            {
-                std::string line{};
-                if (!(in.eof() || in.fail()))
-                {
-                    std::getline(in, line);
-                    if (!line.empty() && check_comment && line[0] == '#')
-                        continue;
-                }
-                return line;
-            }
-        }
-
-        static inline uint32_t lzcnt_s(uint32_t x)
-        {
-            return (x) ? __builtin_clz(x) : 32;
-        }
-
-        static void swap_bytes_16bit_sse(uint16_t* data, size_t count) {
-            size_t i = 0;
-            size_t simd_count = count & ~7; // по 8 uint16_t = 16 байт = 128 бит
-
-            const __m128i shuffle_mask = _mm_set_epi8(
-                14,15,12,13,10,11,8,9,6,7,4,5,2,3,0,1
-            );
-
-            for (; i < simd_count; i += 8) {
-                __m128i v = _mm_loadu_si128(reinterpret_cast<const __m128i*>(data + i));
-                v = _mm_shuffle_epi8(v, shuffle_mask);
-                _mm_storeu_si128(reinterpret_cast<__m128i*>(data + i), v);
-            }
-
-            // оставшиеся
-            for (; i < count; ++i) {
-                uint16_t val = data[i];
-                data[i] = (val >> 8) | (val << 8);
-            }
-        }
-
-        void load(const std::string& filename) {
-            std::ifstream in(filename, std::ios::binary);
-            if (!in) {
-                throw std::runtime_error("Failed to open file for reading");
-            }
-            if (get_next_line(in) != "P6")
-                throw std::invalid_argument("Invalid PPM format\nuse: ffmpeg -i input.png -pix_fmt rgb48 output.ppm");
-
-            std::istringstream pgm_width_height_is(get_next_line(in,true));
-            std::istringstream pgm_bits_per_channel_is(get_next_line(in));
-
-            pgm_width_height_is >> width >> height;
-            uint32_t maxvalue{};
-            pgm_bits_per_channel_is >> maxvalue;
-            bits_per_channel = 32 - lzcnt_s( maxvalue );
-            channel_nb = 3;
-
-            if (width == 0 || height == 0 || bits_per_channel == 0 || bits_per_channel > 16 )
-                throw std::invalid_argument("Invalid PPM format");
-            auto size = size_t(width) * height * channel_nb * (bits_per_channel > 8 ? 2 : 1);
-            if (bits_per_channel > 8) {
-                channel_type = ChannelType::uint16be;
-            } else {
-                channel_type = ChannelType::uint8;
-            }
-            allocate();
-            in.read(reinterpret_cast<char*>(data.get()),size);
-        }
-        inline void save( const std::string& filename ) {
-            using ChannelType = llrice::RawImage::ChannelType;
-
-            if (channel_nb != 3) {
-                throw std::runtime_error("channel_nb != 3");
-            }
-            if (!(channel_type == ChannelType::uint8 || channel_type == ChannelType::uint16 || channel_type == ChannelType::uint16be )) {
-                throw std::runtime_error("Unsupported channel type for PPM output");
-            }
-
-            std::ofstream out(filename, std::ios::binary);
-            if (!out) {
-                throw std::runtime_error("Failed to open file for writing");
-            }
-
-            out << "P6\n" << width << ' ' << height << "\n" << (uint32_t{1} << bits_per_channel)-1 << "\n";
-
-            be();
-            out.write(reinterpret_cast<char*>(data.get()), width*height*3* (channel_type==ChannelType::uint8 ? 1 : 2));
-
-        }
-        inline void le() {
-            if (channel_type == ChannelType::uint16be) {
-                swap_bytes_16bit_sse(as<uint16_t>(), width * height * channel_nb);
-                channel_type = ChannelType::uint16;
-            }
-        }
-        inline void be() {
-            if (channel_type == ChannelType::uint16) {
-                swap_bytes_16bit_sse(as<uint16_t>(), width * height * channel_nb);
-                channel_type = ChannelType::uint16be;
-            }
-        }
-
-    };
 
     inline auto rlgr_decode(std::vector<uint64_t> & poolvec)
     {
@@ -326,12 +212,16 @@ namespace llrice
 #endif
 
 #ifdef ONE_CODER
-        Decoder decoder(pool ,count);
+        Decoder g_decoder(pool);
+        Decoder rb_decoder(pool);
+    #ifdef USE_RLGR3
+        BitStream::Reader r_decoder(pool);
+    #endif
 #else
         std::array<Decoder,3> decoders{
-            Decoder(pool, (count / 3) + (0 < (count % 3))),
-            Decoder(pool, (count / 3) + (1 < (count % 3))),
-            Decoder(pool, (count / 3) + (2 < (count % 3)))
+            Decoder(pool),
+            Decoder(pool),
+            Decoder(pool)
         };
 #endif
         int clamp = (1 << img.bits_per_channel)-1;
@@ -341,9 +231,25 @@ namespace llrice
             auto prev_line = line[(h-1) & 1];
             for (uint32_t w = 0; w < width*4; w+=4) {
                 #ifdef ONE_CODER
-                    int16_t v0 = Rice::to_signed( decoder.get() );
-                    int16_t v1 = Rice::to_signed( decoder.get() );
-                    int16_t v2 = Rice::to_signed( decoder.get() );
+                    int16_t v0{0};
+                    int16_t v1 = Rice::to_signed( g_decoder.get() );
+                    int16_t v2{0};
+                    #ifdef USE_RLGR3
+                        auto rb = rb_decoder.get();
+                        if (unlikely(rb != 0)) {
+                            auto r_rem = std20::bit_width(rb);
+                            r_decoder.reserve(r_rem);
+                            auto r = r_decoder.peek_n(r_rem);
+                            r_decoder.skip(r_rem);
+                            v0 = Rice::to_signed( r );
+                            v2 = Rice::to_signed( rb - r );
+                        }
+                    #else
+                        v0 = Rice::to_signed( rb_decoder.get() );
+                        v2 = Rice::to_signed( rb_decoder.get() );
+
+                    #endif
+
                 #else
                     int16_t v0 = Rice::to_signed( decoders[0].get() );
                     int16_t v1 = Rice::to_signed( decoders[1].get() );
@@ -360,6 +266,16 @@ namespace llrice
                 b += g;
                 store(r,g,b);
             }
+        #ifdef USE_NEW_LINE
+            #ifdef ONE_CODER
+                g_decoder.new_line();
+                rb_decoder.new_line();
+            #else
+                decoders[0].new_line();
+                decoders[1].new_line();
+                decoders[2].new_line();
+            #endif
+        #endif
         }
         };//lambda
         if (img.channel_type == RawImage::ChannelType::uint16) {

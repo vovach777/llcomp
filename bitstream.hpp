@@ -73,6 +73,7 @@ namespace BitStream {
     }
 
     };
+
     struct alignas(32) Reader
     {
         uint64_t buf64{0}; // stores bits read from the buffer
@@ -111,12 +112,12 @@ namespace BitStream {
 
         inline void skip(uint32_t n)
         {
-            if (likely( n == 0)) return;
+            assert(n != 0);
             assert(n <= 32);
             assert(total_buffered >= n);
             if (likely( n <= bits_valid_64)) {
                 total_buffered -= n;
-                if (likely(n == 32)){
+                if (unlikely(n == 32)){
                     buf32 = static_cast<uint32_t>(buf64 >> 32);
                     buf64 <<= 32;
                     bits_valid_64 -= 32;
@@ -136,17 +137,31 @@ namespace BitStream {
                 buf32 |= static_cast<uint32_t>(buf64 >> (64U - rem));
                 n -= rem;
                 total_buffered -= rem;
-
             }
+            assert( n != 0 );
+            total_buffered -= n;
 
-            if ( likely( res.size() == 0) ) {
-                total_buffered -= n;
-                buf32 <<= n;
+            if ( unlikely(res.size() == 0)) {
+                if (unlikely(n==32))
+                    buf32 = 0;
+                 else
+                    buf32 <<= n;
                 return;
+            } else {
+                buf64 = res.get();
+                bits_valid_64 = 64;
+                if (unlikely(n == 32)){
+                    buf32 = static_cast<uint32_t>(buf64 >> 32);
+                    buf64 <<= 32;
+                    bits_valid_64 -= 32;
+                }else {
+                    buf32 <<= n;
+                    buf32 |= static_cast<uint32_t>(buf64 >> (64 - n));
+                    buf64 <<= n;
+                    bits_valid_64 -= n;
+                }
             }
-            buf64 = res.get();
-            bits_valid_64 = 64;
-            skip(n);
+
         }
 
         inline uint32_t peek32()

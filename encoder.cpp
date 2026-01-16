@@ -5,6 +5,7 @@
 #include <vector>
 #include "llrice.hpp"
 #include "profiling.hpp"
+#include "image.hpp"
 
 int main(int argc, char** argv) {
     profiling::StopWatch execute_time;
@@ -20,7 +21,7 @@ int main(int argc, char** argv) {
         const char* filename = argv[1];
         const char* outputFilename = argv[2];
         std::vector<uint64_t> compressed;
-        llrice::RawImage img;
+        RawImage img;
         img.load(std::string(filename));
         img.le();
         execute_time.startnew();

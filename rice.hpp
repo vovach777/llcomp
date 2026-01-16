@@ -1,6 +1,6 @@
 #pragma once
 #include <cstdint>
-#define USE_ESC_BITS 16
+#define USE_ESC_BITS 32
 
 namespace Rice
 {

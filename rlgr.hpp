@@ -146,9 +146,12 @@ namespace RLGR {
             if (rl > 0) {
                 uint32_t k_ = k>>3;
                 assert(k_ > 0);
+                assert(inrun);
                 s.put_bits(1,1);
                 s.put_bits(k_,rl);
+                rl = 0;
             }
+            inrun = false;
         }
 
         void flush() {
@@ -320,31 +323,46 @@ namespace RLGR {
         }
 
         inline void new_line() {
-            run_mode = false;
+            if (run_mode) {
+                assert(rl == 0);
+                run_mode = false;
+            }
         }
     };
 }
 
 namespace RLGR::Simple {
 
+
+
     // inline void adapt_k(uint32_t value, uint32_t &k) {
-    //     auto new_k = std20::bit_width(value);
-    //     if (k == new_k)
-    //         return;
-    //     if (new_k == 0) {
+    //     if (value == 0) {
     //         k = 0;
     //         return;
     //     }
-    //     k = (k + new_k) / 2;
+    //     uint32_t value_of_k = k < 4? k*2 : ((1 << (k+1))); //TODO: tune k=2,3
+    //     k = std20::bit_width((value * 4 + value + value_of_k) / 8);
+
     // }
-inline void adapt_k(uint32_t value, uint32_t &k) {
-    auto new_k = std20::bit_width(value);
-    // Вычисляем среднее безусловно
-    uint32_t avg_k = (k + new_k) >> 1;
-    // Если new_k == 0, результат 0, иначе среднее.
-    // Это компилируется в CMOV (conditional move)
-    k = (new_k == 0) ? 0 : avg_k;
-}
+    inline void adapt_k(uint32_t value, uint32_t &k) {
+        auto new_k = std20::bit_width(value);
+        if (likely(k == new_k))
+            return;
+        else  {
+            k = likely(new_k == 0)  ?  0 :  (k*3 + new_k*5) >> 3;
+        }
+
+    }
+
+
+// inline void adapt_k(uint32_t value, uint32_t &k) {
+//     auto new_k = std20::bit_width(value);
+//     // Вычисляем среднее безусловно
+//     uint32_t avg_k = (k + new_k) >> 1;
+//     // Если new_k == 0, результат 0, иначе среднее.
+//     // Это компилируется в CMOV (conditional move)
+//     k = (new_k == 0) ? 0 : avg_k;
+// }
     constexpr bool RLMode = true;
 
     class Encoder {
@@ -360,7 +378,7 @@ inline void adapt_k(uint32_t value, uint32_t &k) {
             if constexpr (RLMode) {
                 if (kd == 0) {
                     if (rl==0)
-                        s.reserve(128);
+                        s.reserve( (USE_ESC_BITS + 32) * 2);
                     if (v == 0) {
                         rl+=1;
                         return;
@@ -374,9 +392,21 @@ inline void adapt_k(uint32_t value, uint32_t &k) {
                     return;
                 }
             }
-            s.reserve(64);
+            s.reserve( (USE_ESC_BITS + 32) );
             Rice::write(v,kd,s);
             adapt_k(v,kd);
+        }
+
+        void new_line() {
+            if (rl > 0) {
+                Rice::write(rl-1,kz,s);
+                adapt_k(rl-1,kz);
+                Rice::write(0,kt,s);
+                adapt_k(0,kt);
+                kd = kt;
+                rl = 0;
+            }
+
         }
 
         void flush() {
@@ -398,7 +428,7 @@ inline void adapt_k(uint32_t value, uint32_t &k) {
         uint32_t val=0;
         BitStream::Reader s;
         public:
-        Decoder(const PagePool& pool, size_t dummy_size) : s(pool) {}
+        Decoder(const PagePool& pool) : s(pool) {}
 
         inline uint32_t get() {
 
@@ -408,7 +438,7 @@ inline void adapt_k(uint32_t value, uint32_t &k) {
                     return (rl == 0) ? val : 0;
                 }
                 if (kd == 0) {
-                    s.reserve(128);
+                    s.reserve( (USE_ESC_BITS + 32) * 2);
                     rl = Rice::read(kz,s);
                     adapt_k(rl,kz);
                     val =  Rice::read(kt,s);
@@ -420,11 +450,15 @@ inline void adapt_k(uint32_t value, uint32_t &k) {
                     return 0;
                 }
             }
-            s.reserve(64);
+            s.reserve( (USE_ESC_BITS + 32) );
             auto v = Rice::read(kd,s);
             adapt_k(v,kd);
             return v;
         }
+        void new_line() {
+            assert(rl == 0);
+        }
+
 
     };
 }
