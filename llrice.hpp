@@ -28,7 +28,7 @@ namespace llrice
     constexpr inline uint32_t signature = 'l' | 'l' << 8U | 'r' << 16U | rev << 24U;
 
     template <typename T>
-    inline int median(T a, T b, T c)
+    inline T median(T a, T b, T c)
     {
         //return a + b + c - std::max({a, b, c}) - std::min({a, b, c});
         return std::clamp(c, std::min(a, b), std::max(a, b));
