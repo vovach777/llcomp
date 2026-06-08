@@ -15,11 +15,11 @@
 #include <type_traits>
 
 namespace llcomp {
-enum ModelSize_t {ModelSizeSmall,ModelSizeStandard, ModelSizeLarge};
+enum ModelSize_t {ModelSizeTiny, ModelSizeSmall,ModelSizeStandard, ModelSizeLarge};
 constexpr inline auto ext = ".llcomp";
 constexpr inline uint8_t revision = 3;
 constexpr inline uint8_t magic_revision = 0x77 + revision;
-constexpr inline ModelSize_t ModelSize = ModelSizeSmall;
+constexpr inline ModelSize_t ModelSize = ModelSizeTiny;
 constexpr int DeadZoneQ3 = 4;
 constexpr inline int param_e_lim = 14;  //0,1,2,3,4
 constexpr inline int param_r_lim = -1;  //5,6
@@ -32,7 +32,22 @@ constexpr size_t getStatesNb() {
     if constexpr (ModelSize == ModelSizeStandard) {
         return (11 * 11 * 11 + 1) / 2 * substates_nb;
     }
-    return (3 * 3 * 3 + 1) / 2 * substates_nb;
+    if constexpr (ModelSize == ModelSizeSmall) {
+        return (3 * 3 * 3 + 1) / 2 * substates_nb;
+    }
+    if constexpr (ModelSize == ModelSizeTiny) {
+        // 1. (3 * 3) = 9 базовых комбинаций
+        // 2. Вычитаем 1 (откладываем в сторону абсолютно плоский контекст)
+        // 3. Делим на 2 (схлопываем зеркальные градиенты, остается 4 уникальных)
+        // 4. Умножаем на 2 (дублируем эти 4 градиента: отдельно для Luma, отдельно для Chroma)
+        // 5. Прибавляем 1 (возвращаем наш глобальный общий ноль)
+        // Итог spatial_contexts = 9.
+        constexpr size_t spatial_contexts = ((3 * 3 - 1) / 2) * 2 + 1;
+
+        // Умножаем 9 базовых корзин на твои внутренние под-контексты
+        return spatial_contexts * substates_nb;
+    }
+
 }
 constexpr int Lines = ModelSize == ModelSizeLarge ? 3 : 2;
 
@@ -350,6 +365,19 @@ inline int quant3(int x) {
     return (x > DeadZoneQ3) - (x < -DeadZoneQ3);
 }
 
+inline int quant9(int x) {
+    int y=0;
+    y += x >= 4;
+    y += x >= 8;
+    y += x >= 16;
+    y += x >= 32;
+    y -= x <= -4;
+    y -= x <= -8;
+    y -= x <= -16;
+    y -= x <= -32;
+    return y;
+}
+
 template <typename T>
 inline T median(T a, T b, T c)
 {
@@ -417,7 +445,7 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& rgb, int w
             }
             pos += channels;
             for (int i = 0; i < channels; i++) {
-                const int l = w > 0 ? line0[x - x1 + i] : h > 0 ? line1[x + i] : 128;
+                const int l = w > 0 ? line0[x - x1 + i] : h > 0 ? line1[x + i] : 0;
                 const int t = h > 0 ? line1[x + i] : l;
                 [[maybe_unused]] const int L = w > 1 ? line0[x - x2 + i] : l;
                 const int tl = h > 0 && w > 0 ? line1[x - x1 + i] : t;
@@ -442,14 +470,26 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& rgb, int w
                         quant3(t - tr) * (3 * 3);
                 }
 
+                [[maybe_unused]] bool is_chroma = (i==0 || i==2);
+
+                if constexpr (ModelSize == ModelSizeTiny) {
+                    hash = quant3( tl - t ) + quant3( tl - l )*3;
+                }
+
                 const int predict = median(l, l + t - tl, t);
+
                 int diff = (line0[x + i] - predict);
+
 
                 if (hash < 0) {
                     hash = -hash;
                     diff = -diff;
                 }
+                if constexpr (ModelSize == ModelSizeTiny) {
+                    hash += is_chroma && hash > 0 ? (3*3-1)/2 : 0;
+                }
                 assert(hash >= 0);
+                assert(hash*substates_nb < getStatesNb());
 
                 binarization::putSymbol<true,param_e_lim,param_r_lim,param_s_bit>(diff,[&](int ctx, bool bit) {
                    if (ctx < 0) {
@@ -511,7 +551,7 @@ inline RawImage decompressImage(const std::vector<uint8_t>& data) {
         for (size_t w = 0; w < width; ++w) {
             const size_t x = w * channels;
             for (size_t i = 0; i < channels; ++i) {
-                const int l = w > 0 ? line0[x - x1 + i] : (h > 0 ? line1[x + i] : 128);
+                const int l = w > 0 ? line0[x - x1 + i] : (h > 0 ? line1[x + i] : 0);
                 const int t = h > 0 ? line1[x + i] : l;
                 [[maybe_unused]] const int L = w > 1 ? line0[x - x2 + i] : l;
                 const int tl = h > 0 && w > 0 ? line1[x - x1 + i] : t;
@@ -536,6 +576,12 @@ inline RawImage decompressImage(const std::vector<uint8_t>& data) {
                         quant3(tl - t) * (3) +
                         quant3(t - tr) * (3 * 3);
                 }
+                [[maybe_unused]] bool is_chroma = (i==0 || i==2);
+
+                if constexpr (ModelSize == ModelSizeTiny) {
+                    hash = quant3( tl - t ) + quant3( tl - l )*3;
+                }
+
 
                 const int predict = median(l, l + t - tl, t);
 
@@ -544,6 +590,13 @@ inline RawImage decompressImage(const std::vector<uint8_t>& data) {
                     hash = -hash;
                     neg_diff = true;
                 }
+
+                if constexpr (ModelSize == ModelSizeTiny) {
+                    hash += is_chroma && hash > 0 ? (3*3-1)/2 : 0;
+                }
+                assert(hash >= 0);
+                assert(hash*substates_nb < getStatesNb());
+
 
                 int diff = binarization::getSymbol<true,param_e_lim,param_r_lim, param_s_bit>([&](int ctx) {
                     if (ctx < 0) {
