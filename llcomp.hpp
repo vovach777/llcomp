@@ -15,21 +15,27 @@
 #include <type_traits>
 
 namespace llcomp {
+enum ModelSize_t {ModelSizeSmall,ModelSizeStandard, ModelSizeLarge};
 constexpr inline auto ext = ".llcomp";
-constexpr inline uint8_t revision = 2;
+constexpr inline uint8_t revision = 3;
 constexpr inline uint8_t magic_revision = 0x77 + revision;
-constexpr inline bool LargeModel = true;
-constexpr inline int param_e_lim = 4;  //0,1,2,3,4
-constexpr inline int param_r_lim = 6;  //5,6
-constexpr inline int param_s_bit = 7;  //7
-constexpr inline int substates_nb = 8; //=
+constexpr inline ModelSize_t ModelSize = ModelSizeSmall;
+constexpr int DeadZoneQ3 = 4;
+constexpr inline int param_e_lim = 14;  //0,1,2,3,4
+constexpr inline int param_r_lim = -1;  //5,6
+constexpr inline int param_s_bit = 15;  //7
+constexpr inline int substates_nb = 16; //=
 constexpr size_t getStatesNb() {
-    if constexpr (LargeModel) {
+    if constexpr (ModelSize == ModelSizeLarge) {
         return (11 * 11 * 11 * 5 * 5 + 1) / 2 * substates_nb;
-    } else {
+    }
+    if constexpr (ModelSize == ModelSizeStandard) {
         return (11 * 11 * 11 + 1) / 2 * substates_nb;
     }
+    return (3 * 3 * 3 + 1) / 2 * substates_nb;
 }
+constexpr int Lines = ModelSize == ModelSizeLarge ? 3 : 2;
+
 class RangeEncoder {
 public:
     RangeEncoder(std::function<void(uint8_t)> put_byte): low(0), range(0xFF00), put_byte(put_byte), outstanding_count(0), outstanding_byte(-1) {
@@ -340,19 +346,14 @@ inline int quant5(int x) {
     return quant5_table[std::max(-128, std::min(127, x)) & 0xFF];
 }
 
-inline int median(int a, int b, int c) {
-    if (a > b) {
-        if (c > b) {
-            if (c > a) b = a;
-            else b = c;
-        }
-    } else {
-        if (b > c) {
-            if (c > a) b = c;
-            else b = a;
-        }
-    }
-    return b;
+inline int quant3(int x) {
+    return (x > DeadZoneQ3) - (x < -DeadZoneQ3);
+}
+
+template <typename T>
+inline T median(T a, T b, T c)
+{
+    return std::clamp(c, std::min(a, b), std::max(a, b));
 }
 
 inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& rgb, int width, int height, int channels) {
@@ -381,16 +382,18 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& rgb, int w
         writeU8(x);
     });
 
-    std::vector<std::vector<int16_t>> lines(3, std::vector<int16_t>(stride));
+    std::vector<std::vector<int16_t>> lines(Lines, std::vector<int16_t>(stride));
     std::vector<cabac::State> states( getStatesNb() );
     int pos = 0;
     const int x1 = channels;
     const int x2 = channels * 2;
 
     for (int h = 0; h < height; ++h) {
-        auto& line0 = lines[h % 3];
-        auto& line1 = lines[(h + 3 - 1) % 3];
-        auto& line2 = lines[(h + 3 - 2) % 3];
+        auto& line0 = lines[ (h+Lines) % Lines];
+        auto& line1 = lines[ (h+Lines-1) % Lines];
+        [[maybe_unused]]
+        auto& line2 = lines[ (h+Lines-2) % Lines];
+
         for (int w = 0; w < width; ++w) {
             const int x = w * channels;
             if (channels >= 3) {
@@ -399,7 +402,7 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& rgb, int w
                 int b = rgb[pos + 2];
                 b -= g;
                 r -= g;
-                g += (b + r) / 4;
+                g += (b + r) >> 2;
 
                 line0[x + 0] = r;
                 line0[x + 1] = g;
@@ -416,17 +419,29 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& rgb, int w
             for (int i = 0; i < channels; i++) {
                 const int l = w > 0 ? line0[x - x1 + i] : h > 0 ? line1[x + i] : 128;
                 const int t = h > 0 ? line1[x + i] : l;
-                const int L = w > 1 ? line0[x - x2 + i] : l;
+                [[maybe_unused]] const int L = w > 1 ? line0[x - x2 + i] : l;
                 const int tl = h > 0 && w > 0 ? line1[x - x1 + i] : t;
                 const int tr = h > 0 && w < (width - 1) ? line1[x + x1 + i] : t;
-                const int T = h > 1 ? line2[x + i] : t;
-
-                int hash = (quant11(l - tl) +
-                    quant11(tl - t) * (11) +
-                    quant11(t - tr) * (11 * 11));
-                if (LargeModel) {
-                    hash += quant5(L - l) * (5 * 11 * 11) + quant5(T - t) * (5 * 5 * 11 * 11);
+                [[maybe_unused]] const int T = h > 1 ? line2[x + i] : t;
+                int hash;
+                if constexpr (ModelSize == ModelSizeLarge) {
+                    hash = quant11(l - tl) +
+                        quant11(tl - t) * (11) +
+                        quant11(t - tr) * (11 * 11) +
+                        quant5(L - l) * (5 * 11 * 11) +
+                        quant5(T - t) * (5 * 5 * 11 * 11);
                 }
+                if constexpr (ModelSize == ModelSizeStandard) {
+                    hash = quant11(l - tl) +
+                        quant11(tl - t) * (11) +
+                        quant11(t - tr) * (11 * 11);
+                }
+                if constexpr (ModelSize == ModelSizeSmall) {
+                    hash = quant3(l - tl) +
+                        quant3(tl - t) * (3) +
+                        quant3(t - tr) * (3 * 3);
+                }
+
                 const int predict = median(l, l + t - tl, t);
                 int diff = (line0[x + i] - predict);
 
@@ -437,10 +452,14 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& rgb, int w
                 assert(hash >= 0);
 
                 binarization::putSymbol<true,param_e_lim,param_r_lim,param_s_bit>(diff,[&](int ctx, bool bit) {
-                   auto base = states.begin() +  hash * substates_nb;
-                   auto& state = base[ctx];
-                   comp.put(bit, state.P());
-                   state.update(bit);
+                   if (ctx < 0) {
+                     comp.put(bit, 128);
+                   } else {
+                    auto base = states.begin() +  hash * substates_nb;
+                    auto& state = base[ctx];
+                    comp.put(bit, state.P());
+                    state.update(bit);
+                   }
                 });
 
             }
@@ -480,30 +499,42 @@ inline RawImage decompressImage(const std::vector<uint8_t>& data) {
 
     const int x1 = channels;
     const int x2 = channels * 2;
-    std::vector<std::vector<int16_t>> lines(3, std::vector<int16_t>(stride));
+    std::vector<std::vector<int16_t>> lines(Lines, std::vector<int16_t>(stride));
     std::vector<cabac::State> states( getStatesNb() );
 
     for (size_t h = 0; h < height; ++h) {
-        auto& line0 = lines[h % 3];
-        auto& line1 = lines[(h + 2) % 3];
-        auto& line2 = lines[(h + 1) % 3];
+        auto& line0 = lines[ (h+Lines) % Lines];
+        auto& line1 = lines[ (h+Lines-1) % Lines];
+        [[maybe_unused]]
+        auto& line2 = lines[ (h+Lines-2) % Lines];
 
         for (size_t w = 0; w < width; ++w) {
             const size_t x = w * channels;
             for (size_t i = 0; i < channels; ++i) {
                 const int l = w > 0 ? line0[x - x1 + i] : (h > 0 ? line1[x + i] : 128);
                 const int t = h > 0 ? line1[x + i] : l;
-                const int L = w > 1 ? line0[x - x2 + i] : l;
+                [[maybe_unused]] const int L = w > 1 ? line0[x - x2 + i] : l;
                 const int tl = h > 0 && w > 0 ? line1[x - x1 + i] : t;
                 const int tr = h > 0 && w < width - 1 ? line1[x + x1 + i] : t;
-                const int T = h > 1 ? line2[x + i] : t;
+                [[maybe_unused]] const int T = h > 1 ? line2[x + i] : t;
 
-                int hash = (quant11(l - tl) +
-                    quant11(tl - t) * 11 +
-                    quant11(t - tr) * 11 * 11);
-
-                if (LargeModel) {
-                    hash += quant5(L - l) * (5 * 11 * 11) + quant5(T - t) * (5 * 5 * 11 * 11);
+                int hash;
+                if constexpr (ModelSize == ModelSizeLarge) {
+                    hash = quant11(l - tl) +
+                        quant11(tl - t) * (11) +
+                        quant11(t - tr) * (11 * 11) +
+                        quant5(L - l) * (5 * 11 * 11) +
+                        quant5(T - t) * (5 * 5 * 11 * 11);
+                }
+                if constexpr (ModelSize == ModelSizeStandard) {
+                    hash = quant11(l - tl) +
+                        quant11(tl - t) * (11) +
+                        quant11(t - tr) * (11 * 11);
+                }
+                if constexpr (ModelSize == ModelSizeSmall) {
+                    hash = quant3(l - tl) +
+                        quant3(tl - t) * (3) +
+                        quant3(t - tr) * (3 * 3);
                 }
 
                 const int predict = median(l, l + t - tl, t);
@@ -515,11 +546,15 @@ inline RawImage decompressImage(const std::vector<uint8_t>& data) {
                 }
 
                 int diff = binarization::getSymbol<true,param_e_lim,param_r_lim, param_s_bit>([&](int ctx) {
-                    auto base = states.begin() +  hash * substates_nb;
-                    auto& state = base[ctx];
-                    bool bit = decomp.get(state.P());
-                    state.update(bit);
-                    return bit;
+                    if (ctx < 0) {
+                        return decomp.get(128);
+                    } else {
+                        auto base = states.begin() +  hash * substates_nb;
+                        auto& state = base[ctx];
+                        bool bit = decomp.get(state.P());
+                        state.update(bit);
+                        return bit;
+                    }
                  });
 
 
@@ -532,7 +567,7 @@ inline RawImage decompressImage(const std::vector<uint8_t>& data) {
             int r = line0[x + 0];
             int g = line0[x + 1];
             int b = line0[x + 2];
-            g -= ((r + b) / 4);
+            g -= ((r + b) >> 2);
             r += g;
             b += g;
             pixels[rgb_pos++] = std::max(0, std::min(255, r));
