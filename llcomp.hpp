@@ -17,10 +17,14 @@
 
 namespace llcomp {
 enum ModelSize_t {ModelSizeTiny, ModelSizeSmall,ModelSizeStandard, ModelSizeLarge};
-constexpr inline auto ext = ".llcomp";
-constexpr inline uint8_t revision = 3;
+constexpr inline auto ext = ".llc";
+constexpr inline uint8_t revision = 4;
 constexpr inline uint8_t magic_revision = 0x77 + revision;
-constexpr inline ModelSize_t ModelSize = ModelSizeLarge;
+#ifdef SELECT_MODEL
+constexpr inline ModelSize_t ModelSize = SELECT_MODEL;
+#else
+constexpr inline ModelSize_t ModelSize = ModelSizeStandard;
+#endif
 constexpr int DeadZoneQ3 = 4;
 constexpr inline int param_e_lim = 14;  //0,1,2,3,4
 constexpr inline int param_r_lim = -1;  //5,6
@@ -37,10 +41,17 @@ constexpr size_t getStatesNb() {
         return (3 * 3 * 3 + 1) / 2 * substates_nb;
     }
     if constexpr (ModelSize == ModelSizeTiny) {
-        return (7*7+1)/2 * substates_nb;
+        return (24+24+1) * substates_nb;
     }
-
 }
+constexpr size_t HashToContext(size_t hash, bool is_chroma) {
+    if constexpr (ModelSize == ModelSizeTiny) {
+       hash +=  24 * (hash!=0) * is_chroma;
+    }
+    hash *=substates_nb;
+    return hash;
+}
+
 constexpr int Lines = ModelSize == ModelSizeLarge ? 3 : 2;
 
 class RangeEncoder {
@@ -443,6 +454,7 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& rgb, int w
             }
             pos += channels;
             for (int i = 0; i < channels; i++) {
+                [[maybe_unused]] bool is_chroma = (i==0 || i==2)  && (channels >= 3);
                 const int l = w > 0 ? line0[x - x1 + i] : h > 0 ? line1[x + i] : 0;
                 const int t = h > 0 ? line1[x + i] : l;
                 [[maybe_unused]] const int L = w > 1 ? line0[x - x2 + i] : l;
@@ -472,8 +484,6 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& rgb, int w
                            quant7(tl - t) * 7;
                 }
 
-                [[maybe_unused]] bool is_chroma = (i==0 || i==2);
-
                 const int predict = median(l, l + t - tl, t);
 
                 int diff = (line0[x + i] - predict);
@@ -484,14 +494,12 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& rgb, int w
                     diff = -diff;
                 }
 
-                assert(hash >= 0);
-                assert(hash*substates_nb < getStatesNb());
+                auto base = states.data() + HashToContext(hash,is_chroma);
 
                 binarization::putSymbol<true,param_e_lim,param_r_lim,param_s_bit>(diff,[&](int ctx, bool bit) {
                    if (ctx < 0) {
                      comp.put(bit, 128);
                    } else {
-                    auto base = states.begin() +  hash * substates_nb;
                     auto& state = base[ctx];
                     comp.put(bit, state.P());
                     state.update(bit);
@@ -547,6 +555,7 @@ inline RawImage decompressImage(const std::vector<uint8_t>& data) {
         for (size_t w = 0; w < width; ++w) {
             const size_t x = w * channels;
             for (size_t i = 0; i < channels; ++i) {
+                [[maybe_unused]] bool is_chroma = (i==0 || i==2)  && (channels >= 3);
                 const int l = w > 0 ? line0[x - x1 + i] : (h > 0 ? line1[x + i] : 0);
                 const int t = h > 0 ? line1[x + i] : l;
                 [[maybe_unused]] const int L = w > 1 ? line0[x - x2 + i] : l;
@@ -576,9 +585,6 @@ inline RawImage decompressImage(const std::vector<uint8_t>& data) {
                     hash = quant7(l - tl) +
                            quant7(tl - t) * 7;
                 }
-
-                [[maybe_unused]] bool is_chroma = (i==0 || i==2);
-
                 const int predict = median(l, l + t - tl, t);
 
                 bool neg_diff = false;
@@ -587,21 +593,18 @@ inline RawImage decompressImage(const std::vector<uint8_t>& data) {
                     neg_diff = true;
                 }
 
-                assert(hash >= 0);
-                assert(hash*substates_nb < getStatesNb());
+                auto base = states.data() + HashToContext(hash, is_chroma);
 
                 int diff = binarization::getSymbol<true,param_e_lim,param_r_lim, param_s_bit>([&](int ctx) {
                     if (ctx < 0) {
                         return decomp.get(128);
                     } else {
-                        auto base = states.begin() +  hash * substates_nb;
                         auto& state = base[ctx];
                         bool bit = decomp.get(state.P());
                         state.update(bit);
                         return bit;
                     }
                  });
-
 
                 if (neg_diff) {
                     diff = -diff;
@@ -615,11 +618,11 @@ inline RawImage decompressImage(const std::vector<uint8_t>& data) {
             g -= ((r + b) >> 2);
             r += g;
             b += g;
-            pixels[rgb_pos++] = std::max(0, std::min(255, r));
-            pixels[rgb_pos++] = std::max(0, std::min(255, g));
-            pixels[rgb_pos++] = std::max(0, std::min(255, b));
+            pixels[rgb_pos++] = static_cast<uint8_t>(r);
+            pixels[rgb_pos++] = static_cast<uint8_t>(g);
+            pixels[rgb_pos++] = static_cast<uint8_t>(b);
             for (size_t i = 3; i < channels; ++i) {
-                pixels[rgb_pos++] = line0[x + i];
+                pixels[rgb_pos++] = static_cast<uint8_t>(line0[x + i]);
             }
         }
     }
