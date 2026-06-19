@@ -20,7 +20,7 @@ enum ModelSize_t {ModelSizeTiny, ModelSizeSmall,ModelSizeStandard, ModelSizeLarg
 constexpr inline auto ext = ".llcomp";
 constexpr inline uint8_t revision = 3;
 constexpr inline uint8_t magic_revision = 0x77 + revision;
-constexpr inline ModelSize_t ModelSize = ModelSizeTiny;
+constexpr inline ModelSize_t ModelSize = ModelSizeLarge;
 constexpr int DeadZoneQ3 = 4;
 constexpr inline int param_e_lim = 14;  //0,1,2,3,4
 constexpr inline int param_r_lim = -1;  //5,6

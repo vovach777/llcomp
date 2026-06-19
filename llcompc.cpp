@@ -4,11 +4,7 @@
 #include <fstream>
 #include <vector>
 #include "llcomp.hpp"
-#define STB_IMAGE_IMPLEMENTATION
-   #define STBI_NO_GIF
-   #define STBI_NO_PSD
-   #define STBI_NO_PIC
-#include "stb_image.h"
+#include "netpbm.hpp"
 
 
 int main(int argc, char** argv) {
@@ -16,14 +12,13 @@ int main(int argc, char** argv) {
         std::cerr << "Usage: " << argv[0] << " <input_image> <output_file>" << std::endl;
         return 1;
     }
-    int width, height, channels;
-    auto stb_img = stbi_load(argv[1] , &width, &height, &channels, 0);
-    if (stb_img == nullptr) {
-        std::cerr << "Error loading image: " << stbi_failure_reason() << std::endl;
-        return 1;
-    }
-    std::vector<uint8_t> rgb = std::vector<uint8_t>(stb_img, stb_img + width * height * channels);
-    stbi_image_free(stb_img);
+    Netpbm ppm(argv[1]);
+    uint32_t width = ppm.width;
+    uint32_t height = ppm.height;
+    uint32_t channels = (ppm.type == '6') ? 3 : (ppm.type == '5') ? 1 : 3;
+    std::vector<uint8_t> rgb(width * height * channels);
+    ppm.read(rgb.data(), rgb.size());
+    ppm.close();
 
     std::vector<uint8_t> compressed = llcomp::compressImage(rgb, width, height, channels);
     const char* outputFile = argv[2];

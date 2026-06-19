@@ -4,8 +4,7 @@
 #include <fstream>
 #include <vector>
 #include "llcomp.hpp"
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "stb_image_write.h"
+#include "netpbm.hpp"
 
 
 int main(int argc, char** argv) {
@@ -25,9 +24,10 @@ int main(int argc, char** argv) {
         auto [pixels, width, height, channels] = llcomp::decompressImage(compressed);
 
         const char* outputFile = argv[2];
-        if  (!stbi_write_png(argv[2], width, height, channels, pixels.data(), width * channels)) {
-            std::cerr << "Error writing output file: " << outputFile << std::endl;
-        }
+        char ppm_type = (channels == 3) ? '6' : (channels == 1) ? '5' : '6';
+        Netpbm ppm(outputFile, ppm_type, width, height, 255);
+        ppm.write(pixels.data(), pixels.size());
+        ppm.close();
     } catch (const std::exception& e) {
         std::cerr << "Error decompressing image: " << e.what() << std::endl;
         return 1;
