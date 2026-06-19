@@ -9,14 +9,13 @@
 
 
 int main(int argc, char** argv) {
-    if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <image_path>" << std::endl;
+    if (argc < 3) {
+        std::cerr << "Usage: " << argv[0] << " <input_file> <output_image>" << std::endl;
         return 1;
     }
-    const char* filename = argv[1];
-    std::ifstream inFile(filename, std::ios::binary);
+    std::ifstream inFile(argv[1], std::ios::binary);
     if (!inFile) {
-        std::cerr << "Error opening input file: " << filename << std::endl;
+        std::cerr << "Error opening input file: " << argv[1] << std::endl;
         return 1;
     }
     std::vector<uint8_t> compressed((std::istreambuf_iterator<char>(inFile)), std::istreambuf_iterator<char>());
@@ -25,8 +24,8 @@ int main(int argc, char** argv) {
     try {
         auto [pixels, width, height, channels] = llcomp::decompressImage(compressed);
 
-        std::string outputFile = std::string(filename) + ".png";
-        if  (!stbi_write_png(outputFile.c_str(), width, height, channels, pixels.data(), width * channels)) {
+        const char* outputFile = argv[2];
+        if  (!stbi_write_png(argv[2], width, height, channels, pixels.data(), width * channels)) {
             std::cerr << "Error writing output file: " << outputFile << std::endl;
         }
     } catch (const std::exception& e) {

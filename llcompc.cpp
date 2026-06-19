@@ -12,15 +12,10 @@
 
 
 int main(int argc, char** argv) {
-    // if (llcomp::binarization::ilog2_32<0>(uint32_t{1}) == 0) {
-    //     std::cerr << "Unsafe behavior is enabled" << std::endl;
-    //     return;
-    // }
-    if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <image_path>" << std::endl;
+    if (argc < 3) {
+        std::cerr << "Usage: " << argv[0] << " <input_image> <output_file>" << std::endl;
         return 1;
     }
-    const char* filename = argv[1];
     int width, height, channels;
     auto stb_img = stbi_load(argv[1] , &width, &height, &channels, 0);
     if (stb_img == nullptr) {
@@ -31,7 +26,7 @@ int main(int argc, char** argv) {
     stbi_image_free(stb_img);
 
     std::vector<uint8_t> compressed = llcomp::compressImage(rgb, width, height, channels);
-    std::string outputFile = std::string(filename) + llcomp::ext;
+    const char* outputFile = argv[2];
     std::ofstream outFile(outputFile, std::ios::binary);
     if (!outFile) {
         std::cerr << "Error opening output file: " << outputFile << std::endl;

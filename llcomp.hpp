@@ -13,6 +13,7 @@
 #include <functional>
 #include <utility>
 #include <type_traits>
+#include <limits>
 
 namespace llcomp {
 enum ModelSize_t {ModelSizeTiny, ModelSizeSmall,ModelSizeStandard, ModelSizeLarge};
@@ -36,16 +37,7 @@ constexpr size_t getStatesNb() {
         return (3 * 3 * 3 + 1) / 2 * substates_nb;
     }
     if constexpr (ModelSize == ModelSizeTiny) {
-        // 1. (3 * 3) = 9 базовых комбинаций
-        // 2. Вычитаем 1 (откладываем в сторону абсолютно плоский контекст)
-        // 3. Делим на 2 (схлопываем зеркальные градиенты, остается 4 уникальных)
-        // 4. Умножаем на 2 (дублируем эти 4 градиента: отдельно для Luma, отдельно для Chroma)
-        // 5. Прибавляем 1 (возвращаем наш глобальный общий ноль)
-        // Итог spatial_contexts = 9.
-        constexpr size_t spatial_contexts = ((3 * 3 - 1) / 2) * 2 + 1;
-
-        // Умножаем 9 базовых корзин на твои внутренние под-контексты
-        return spatial_contexts * substates_nb;
+        return (7*7+1)/2 * substates_nb;
     }
 
 }
@@ -170,6 +162,17 @@ namespace binarization {
     #else
         return static_cast<uint32_t>(std::log2(v));
     #endif
+    }
+
+    /**
+     * @brief Polyfill for std::bit_width (C++20).
+     * Returns the number of bits required to represent the value v.
+     * For v == 0, returns 0.
+     * Equivalent to: 1 + floor(log2(v)) for v > 0.
+     */
+    template <typename T>
+    inline constexpr uint32_t bit_width(T v) noexcept {
+        return ilog2_32<static_cast<uint32_t>(-1)>(v)+1;
     }
 
     /**
@@ -365,17 +368,12 @@ inline int quant3(int x) {
     return (x > DeadZoneQ3) - (x < -DeadZoneQ3);
 }
 
-inline int quant9(int x) {
-    int y=0;
-    y += x >= 4;
-    y += x >= 8;
-    y += x >= 16;
-    y += x >= 32;
-    y -= x <= -4;
-    y -= x <= -8;
-    y -= x <= -16;
-    y -= x <= -32;
-    return y;
+
+
+inline int quant7(int v) {
+          //return -(v < -31)-(v < -15)-(v < -7 )-(v < -3) - (v < -1)  + (v > 1) + (v > 3) + (v > 7) + (v > 15) + (v > 31);
+          return std::min(3, static_cast<int32_t>(binarization::bit_width( 0U+std::abs(v*3/8) ))) *  (v < 0 ? -1 : 1);
+        // return -(v < -2)  + (v > 2) ;
 }
 
 template <typename T>
@@ -469,12 +467,12 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& rgb, int w
                         quant3(tl - t) * (3) +
                         quant3(t - tr) * (3 * 3);
                 }
+                if constexpr (ModelSize == ModelSizeTiny) {
+                    hash = quant7(l - tl) +
+                           quant7(tl - t) * 7;
+                }
 
                 [[maybe_unused]] bool is_chroma = (i==0 || i==2);
-
-                if constexpr (ModelSize == ModelSizeTiny) {
-                    hash = quant3( tl - t ) + quant3( tl - l )*3;
-                }
 
                 const int predict = median(l, l + t - tl, t);
 
@@ -485,9 +483,7 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& rgb, int w
                     hash = -hash;
                     diff = -diff;
                 }
-                if constexpr (ModelSize == ModelSizeTiny) {
-                    hash += is_chroma && hash > 0 ? (3*3-1)/2 : 0;
-                }
+
                 assert(hash >= 0);
                 assert(hash*substates_nb < getStatesNb());
 
@@ -576,12 +572,12 @@ inline RawImage decompressImage(const std::vector<uint8_t>& data) {
                         quant3(tl - t) * (3) +
                         quant3(t - tr) * (3 * 3);
                 }
-                [[maybe_unused]] bool is_chroma = (i==0 || i==2);
-
                 if constexpr (ModelSize == ModelSizeTiny) {
-                    hash = quant3( tl - t ) + quant3( tl - l )*3;
+                    hash = quant7(l - tl) +
+                           quant7(tl - t) * 7;
                 }
 
+                [[maybe_unused]] bool is_chroma = (i==0 || i==2);
 
                 const int predict = median(l, l + t - tl, t);
 
@@ -591,12 +587,8 @@ inline RawImage decompressImage(const std::vector<uint8_t>& data) {
                     neg_diff = true;
                 }
 
-                if constexpr (ModelSize == ModelSizeTiny) {
-                    hash += is_chroma && hash > 0 ? (3*3-1)/2 : 0;
-                }
                 assert(hash >= 0);
                 assert(hash*substates_nb < getStatesNb());
-
 
                 int diff = binarization::getSymbol<true,param_e_lim,param_r_lim, param_s_bit>([&](int ctx) {
                     if (ctx < 0) {
