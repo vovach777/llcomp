@@ -26,10 +26,10 @@ constexpr inline ModelSize_t ModelSize = SELECT_MODEL;
 constexpr inline ModelSize_t ModelSize = ModelSizeStandard;
 #endif
 constexpr int DeadZoneQ3 = 4;
-constexpr inline int param_e_lim = 14;  //0,1,2,3,4
+constexpr inline int param_e_lim = 6;  //0,1,2,3,4
 constexpr inline int param_r_lim = -1;  //5,6
-constexpr inline int param_s_bit = 15;  //7
-constexpr inline int substates_nb = 16; //=
+constexpr inline int param_s_bit = 7;  //7
+constexpr inline int substates_nb = 8; //=
 constexpr size_t getStatesNb() {
     if constexpr (ModelSize == ModelSizeLarge) {
         return (11 * 11 * 11 * 5 * 5 + 1) / 2 * substates_nb;
