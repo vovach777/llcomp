@@ -16,7 +16,7 @@
 #include <limits>
 
 namespace llcomp {
-enum ModelSize_t {ModelSizeTiny, ModelSizeSmall,ModelSizeStandard, ModelSizeLarge};
+enum ModelSize_t {ModelSizeSmall,ModelSizeStandard, ModelSizeLarge};
 constexpr inline auto ext = ".llc";
 constexpr inline uint8_t revision = 4;
 constexpr inline uint8_t magic_revision = 0x77 + revision;
@@ -38,16 +38,10 @@ constexpr size_t getStatesNb() {
         return (11 * 11 * 11 + 1) / 2 * substates_nb;
     }
     if constexpr (ModelSize == ModelSizeSmall) {
-        return (3 * 3 * 3 + 1) / 2 * substates_nb;
-    }
-    if constexpr (ModelSize == ModelSizeTiny) {
-        return (24+24+1) * substates_nb;
+        return (7 * 7 * 7 + 1) / 2 * substates_nb;
     }
 }
 constexpr size_t HashToContext(size_t hash, bool is_chroma) {
-    if constexpr (ModelSize == ModelSizeTiny) {
-       hash +=  24 * (hash!=0) * is_chroma;
-    }
     hash *=substates_nb;
     return hash;
 }
@@ -379,12 +373,8 @@ inline int quant3(int x) {
     return (x > DeadZoneQ3) - (x < -DeadZoneQ3);
 }
 
-
-
 inline int quant7(int v) {
-          //return -(v < -31)-(v < -15)-(v < -7 )-(v < -3) - (v < -1)  + (v > 1) + (v > 3) + (v > 7) + (v > 15) + (v > 31);
-          return std::min(3, static_cast<int32_t>(binarization::bit_width( 0U+std::abs(v*3/8) ))) *  (v < 0 ? -1 : 1);
-        // return -(v < -2)  + (v > 2) ;
+    return -(v < -15 )-(v < -4) - (v < 0)  + (v > 0) + (v > 4) + (v > 15);
 }
 
 template <typename T>
@@ -475,13 +465,9 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& rgb, int w
                         quant11(t - tr) * (11 * 11);
                 }
                 if constexpr (ModelSize == ModelSizeSmall) {
-                    hash = quant3(l - tl) +
-                        quant3(tl - t) * (3) +
-                        quant3(t - tr) * (3 * 3);
-                }
-                if constexpr (ModelSize == ModelSizeTiny) {
                     hash = quant7(l - tl) +
-                           quant7(tl - t) * 7;
+                        quant7(tl - t) * (7) +
+                        quant7(t - tr) * (7 * 7);
                 }
 
                 const int predict = median(l, l + t - tl, t);
@@ -577,14 +563,11 @@ inline RawImage decompressImage(const std::vector<uint8_t>& data) {
                         quant11(t - tr) * (11 * 11);
                 }
                 if constexpr (ModelSize == ModelSizeSmall) {
-                    hash = quant3(l - tl) +
-                        quant3(tl - t) * (3) +
-                        quant3(t - tr) * (3 * 3);
-                }
-                if constexpr (ModelSize == ModelSizeTiny) {
                     hash = quant7(l - tl) +
-                           quant7(tl - t) * 7;
+                        quant7(tl - t) * (7) +
+                        quant7(t - tr) * (7 * 7);
                 }
+
                 const int predict = median(l, l + t - tl, t);
 
                 bool neg_diff = false;
