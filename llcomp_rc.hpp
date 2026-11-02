@@ -30,6 +30,9 @@
 #elif defined(__AVX2__) && !defined(LLC_SCALAR)
 #include <immintrin.h>
 #define LLC_SIMD 1
+#elif defined(__SSE4_1__) && !defined(LLC_SCALAR) && !defined(LLC_FORCE_SIMDE)   // Nehalem..Ivy Bridge: native 4 x XMM
+#include <immintrin.h>
+#define LLC_SIMD 3
 #elif !defined(LLC_SCALAR)
 #if !defined(__AVX__)                   // __m256i, _mm256_load/store/set* are AVX1: needed below AVX (core2),
 #define SIMDE_X86_AVX_ENABLE_NATIVE_ALIASES // but clash with native ones on AVX1 (sandybridge)
@@ -81,6 +84,15 @@ LLC_AI void cdf_update(Cdf& d, uint16_t& cnt, int l) {
         __m256i dn = _mm256_srl_epi16(_mm256_sub_epi16(c, _mm256_load_si256((const __m256i*)(st.tle + h))), sh);
         _mm256_store_si256((__m256i*)(d.c + h), _mm256_blendv_epi8(_mm256_sub_epi16(c, dn), _mm256_add_epi16(c, up), gt));
     }
+#elif LLC_SIMD == 3
+    const __m128i idx = _mm_setr_epi16(0, 1, 2, 3, 4, 5, 6, 7), ll = _mm_set1_epi16(short(l)); __m128i sh = _mm_cvtsi32_si128(rate);
+    for (int h = 0; h < 32; h += 8) {
+        __m128i c = _mm_load_si128((const __m128i*)(d.c + h));
+        __m128i gt = _mm_cmpgt_epi16(_mm_add_epi16(idx, _mm_set1_epi16(short(h))), ll);
+        __m128i up = _mm_srl_epi16(_mm_sub_epi16(_mm_load_si128((const __m128i*)(st.tgt + h)), c), sh);
+        __m128i dn = _mm_srl_epi16(_mm_sub_epi16(c, _mm_load_si128((const __m128i*)(st.tle + h))), sh);
+        _mm_store_si128((__m128i*)(d.c + h), _mm_blendv_epi8(_mm_sub_epi16(c, dn), _mm_add_epi16(c, up), gt));
+    }
 #else
     for (int i = 1; i <= l; ++i) d.c[i] = uint16_t(d.c[i] - (uint16_t(d.c[i] - st.tle[i]) >> rate));
     for (int i = l + 1; i < NL; ++i) d.c[i] = uint16_t(d.c[i] + (uint16_t(st.tgt[i] - d.c[i]) >> rate));
@@ -93,6 +105,11 @@ LLC_AI int cdf_find(const Cdf& d, uint32_t v) {
     __m256i vv = _mm256_set1_epi16(short(v)); int n = 0;
     for (int h = 0; h < 32; h += 16) n += __builtin_popcount(unsigned(_mm256_movemask_epi8(_mm256_cmpeq_epi16(_mm256_max_epu16(_mm256_load_si256((const __m256i*)(d.c + h)), vv), vv))));
     return n / 2 - 1;
+#elif LLC_SIMD == 3
+    const __m128i vv = _mm_set1_epi16(short(v)); const __m128i* p = (const __m128i*)d.c;   // c[i] <= v  <=>  max(c[i], v) == v
+    __m128i m0 = _mm_cmpeq_epi16(_mm_max_epu16(_mm_load_si128(p + 0), vv), vv), m1 = _mm_cmpeq_epi16(_mm_max_epu16(_mm_load_si128(p + 1), vv), vv);
+    __m128i m2 = _mm_cmpeq_epi16(_mm_max_epu16(_mm_load_si128(p + 2), vv), vv), m3 = _mm_cmpeq_epi16(_mm_max_epu16(_mm_load_si128(p + 3), vv), vv);
+    return __builtin_popcount(unsigned(_mm_movemask_epi8(_mm_packs_epi16(m0, m1))) | unsigned(_mm_movemask_epi8(_mm_packs_epi16(m2, m3))) << 16) - 1;
 #else
     const uint16_t* c = d.c; int l = 0;
     l += (c[l + 16] <= v) ? 16 : 0; l += (c[l + 8] <= v) ? 8 : 0; l += (c[l + 4] <= v) ? 4 : 0; l += (c[l + 2] <= v) ? 2 : 0; l += (c[l + 1] <= v) ? 1 : 0;
