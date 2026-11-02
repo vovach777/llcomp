@@ -144,13 +144,15 @@ else: files.sort()
 if file_limit is not None: files = files[:file_limit]
 
 # --- Отрисовка шапки таблицы 1 ---
-header_str = f"| {'File':<35} | {'Original':<15} |"
-sep_str =    f"|{'-'*37}|{'-'*17}|"
+FW, SW = 28, 11   # file-name / size column widths (compact: 5+ codecs fit in a 180-col console)
+for prog in bench_progs: prog['cw'] = max(SW, len(prog['name']))
+header_str = f"| {'File':<{FW}} | {'Original':>{SW}} |"
+sep_str =    f"|{'-'*(FW+2)}|{'-'*(SW+2)}|"
 for prog in bench_progs:
-    header_str += f" {prog['name']:<15} | {'BPP':<6} |"
-    sep_str +=    f"{'-'*17}|{'-'*8}|"
-header_str += f" {'Status':<15} |"
-sep_str +=    f"{'-'*17}|"
+    header_str += f" {prog['name']:>{prog['cw']}} | {'BPP':>5} |"
+    sep_str +=    f"{'-'*(prog['cw']+2)}|{'-'*7}|"
+header_str += f" {'Status':<6} |"
+sep_str +=    f"{'-'*8}|"
 
 print(header_str)
 print(sep_str)
@@ -166,7 +168,7 @@ for orig_file in files:
         break
 
     base_name = os.path.basename(orig_file)
-    display_name = base_name[:35]
+    display_name = base_name[:FW]
     
     # Копируем картинку в RAM-диск
     work_img = os.path.join(bench_dir, base_name)
@@ -177,7 +179,7 @@ for orig_file in files:
     orig_size = os.path.getsize(work_img)
 
     if num_pixels == 0:
-        print(f"| {display_name:<35} | {'ERR_HEAD':<15} | ...")
+        print(f"| {display_name:<{FW}} | {'ERR_HEAD':>{SW}} | ...")
         os.remove(work_img)
         continue
 
@@ -185,7 +187,7 @@ for orig_file in files:
     total_ppm_pixels += num_pixels
     processed_total += 1
 
-    row_out = f"| {display_name:<35} | {orig_size:<15,} |"
+    row_out = f"| {display_name:<{FW}} | {orig_size:>{SW},} |"
     statuses = []
 
     # Прогоняем каждый кодек
@@ -237,9 +239,9 @@ for orig_file in files:
             prog['stats']['total_pixels'] += num_pixels
             prog['stats']['processed_count'] += 1
             
-            row_out += f" {comp_size:<15,} | {bpp:<6.2f} |"
+            row_out += f" {comp_size:>{prog['cw']},} | {bpp:>5.2f} |"
         else:
-            row_out += f" {'-':<15} | {'-':<6} |"
+            row_out += f" {'-':>{prog['cw']}} | {'-':>5} |"
             statuses.append(f"{prog['name']}:{codec_status}")
 
         # Очистка артефактов кодека
@@ -248,7 +250,7 @@ for orig_file in files:
 
     # Итоговый статус по файлу
     final_status = "OK" if not statuses else ",".join(statuses)
-    row_out += f" {final_status:<15} |"
+    row_out += f" {final_status:<6} |"
     print(row_out)
 
     # Удаляем скопированный оригинал из RAM-диска
@@ -257,7 +259,7 @@ for orig_file in files:
 print(sep_str)
 
 # --- Итоговая строка BPP ---
-total_row = f"| {'TOTAL':<35} | {total_ppm_size:<15,} |"
+total_row = f"| {'TOTAL':<{FW}} | {total_ppm_size:>{SW},} |"
 for prog in bench_progs:
     st = prog['stats']
     tot_size = st['total_size']
@@ -265,8 +267,8 @@ for prog in bench_progs:
     size_str = f"{tot_size:,}" if tot_size > 0 else "N/A"
     bpp_str = f"{tot_bpp:.2f}" if tot_size > 0 else "-"
     
-    total_row += f" {size_str:<15} | {bpp_str:<6} |"
-total_row += f" {'':<15} |"
+    total_row += f" {size_str:>{prog['cw']}} | {bpp_str:>5} |"
+total_row += f" {'':<6} |"
 print(total_row)
 
 total_mb = total_ppm_size / (1024 * 1024)
