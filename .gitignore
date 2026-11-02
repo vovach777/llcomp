@@ -8,3 +8,5 @@
 !LICENSE
 !netpbm.hpp
 !avx2.h
+!palic.json
+!benchmark_2.py
