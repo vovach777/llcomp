@@ -13,9 +13,15 @@
       "ext": "llcs"
     },
     {
+      "name": "LLC-RC-1T",
+      "enc": "build/llcompc-rc.exe -t 1",
+      "dec": "build/llcompd-rc.exe -t 1",
+      "ext": "llcs"
+    },
+    {
       "name": "LLC-RC-X2",
       "enc": "build/llcompc-rc.exe -t 2 -s 2",
-      "dec": "build/llcompd-rc.exe -t 2 -s 2",
+      "dec": "build/llcompd-rc.exe -t 2",
       "ext": "llcs"
     },
     {

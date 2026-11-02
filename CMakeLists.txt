@@ -26,9 +26,13 @@ foreach(t llcompc-rc llcompd-rc)
       target_compile_options(${t} PRIVATE /O3 /QxHost)
     elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")          # clang-cl understands -march
       target_compile_options(${t} PRIVATE /O2 -march=native)
-    else()                                                  # cl.exe ignores -march: without /arch it is SSE2 -> SIMDe path
-      set(LLC_MSVC_ARCH "AVX2" CACHE STRING "cl.exe /arch: AVX2 or AVX512")
-      target_compile_options(${t} PRIVATE /O2 /Ob3 /arch:${LLC_MSVC_ARCH})
+    else()     # cl.exe ignores -march and has no "native": default SSE2 -> SIMDe AVX2 path (runs anywhere);
+               # on an AVX2 / AVX-512 machine configure with -DLLC_MSVC_ARCH=AVX2 (or AVX512) for the native path
+      set(LLC_MSVC_ARCH "" CACHE STRING "cl.exe /arch: empty (SSE2+SIMDe), AVX, AVX2, AVX512")
+      target_compile_options(${t} PRIVATE /O2 /Ob3)
+      if(LLC_MSVC_ARCH)
+        target_compile_options(${t} PRIVATE /arch:${LLC_MSVC_ARCH})
+      endif()
     endif()
   else()
     target_compile_options(${t} PRIVATE -O3 -march=native)

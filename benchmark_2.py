@@ -6,6 +6,12 @@ import time
 import sys
 import random
 import json
+import shlex
+
+def split_cmd(cmd):
+    """'build/x.exe -t 2 -s 2' -> ('build/x.exe', ['-t', '2', '-s', '2']); quotes allowed for paths with spaces."""
+    parts = [p.strip('"') for p in shlex.split(cmd, posix=False)]
+    return parts[0], parts[1:]
 
 def read_ppm_p6(filename):
     """Reads a P6 PPM file, returns header info and pixel data, handling comments."""
@@ -109,14 +115,15 @@ os.makedirs(bench_dir, exist_ok=True)
 
 # Копируем кодеки в RAM-диск и обновляем пути
 for prog in bench_progs:
-    enc_basename = os.path.basename(prog['enc'])
-    dec_basename = os.path.basename(prog['dec'])
-    
-    prog['ram_enc'] = os.path.join(bench_dir, enc_basename)
-    prog['ram_dec'] = os.path.join(bench_dir, dec_basename)
-    
-    shutil.copy(prog['enc'], prog['ram_enc'])
-    shutil.copy(prog['dec'], prog['ram_dec'])
+    # "enc"/"dec" may carry arguments: "build/llcompc-rc.exe -t 2 -s 2"
+    enc_exe, prog['enc_args'] = split_cmd(prog['enc'])
+    dec_exe, prog['dec_args'] = split_cmd(prog['dec'])
+
+    prog['ram_enc'] = os.path.join(bench_dir, os.path.basename(enc_exe))
+    prog['ram_dec'] = os.path.join(bench_dir, os.path.basename(dec_exe))
+
+    shutil.copy(enc_exe, prog['ram_enc'])
+    shutil.copy(dec_exe, prog['ram_dec'])
     
     # Инициализация статистики
     prog['stats'] = {
@@ -194,7 +201,7 @@ for orig_file in files:
         # Сжатие
         try:
             t0 = time.time()
-            res = subprocess.run([prog['ram_enc'], work_img, comp_file], capture_output=True, text=True)
+            res = subprocess.run([prog['ram_enc'], *prog['enc_args'], work_img, comp_file], capture_output=True, text=True)
             t1 = time.time()
             if res.returncode != 0:
                 codec_status = f"ERR_C({res.returncode})"
@@ -207,7 +214,7 @@ for orig_file in files:
         if codec_status == "OK":
             try:
                 t0 = time.time()
-                res = subprocess.run([prog['ram_dec'], comp_file, decomp_file], capture_output=True, text=True)
+                res = subprocess.run([prog['ram_dec'], *prog['dec_args'], comp_file, decomp_file], capture_output=True, text=True)
                 t1 = time.time()
                 if res.returncode != 0:
                     codec_status = f"ERR_D({res.returncode})"
