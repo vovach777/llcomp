@@ -7,3 +7,4 @@
 !README.md
 !LICENSE
 !netpbm.hpp
+!avx2.h
