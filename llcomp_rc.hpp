@@ -31,6 +31,9 @@
 #include <immintrin.h>
 #define LLC_SIMD 1
 #elif !defined(LLC_SCALAR)
+#if !defined(__AVX__)                   // __m256i, _mm256_load/store/set* are AVX1: needed below AVX (core2),
+#define SIMDE_X86_AVX_ENABLE_NATIVE_ALIASES // but clash with native ones on AVX1 (sandybridge)
+#endif
 #define SIMDE_X86_AVX2_ENABLE_NATIVE_ALIASES
 #include "avx2.h"
 #define LLC_SIMD 1
