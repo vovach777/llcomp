@@ -1,0 +1,38 @@
+{
+  "bench_prog": [
+    {
+      "name": "LLC-RC-1T",
+      "enc": "build/llcompc-rc.exe -t 1",
+      "dec": "build/llcompd-rc.exe -t 1",
+      "ext": "llcs"
+    },
+    {
+      "name": "LLC-RC-X2",
+      "enc": "build/llcompc-rc.exe -t 2 -s 2",
+      "dec": "build/llcompd-rc.exe -t 2",
+      "ext": "llcs"
+    },
+    {
+      "name": "PLT2-1T",
+      "enc": "../plt2/build/plt2.exe c -t 1",
+      "dec": "../plt2/build/plt2.exe d -t 1",
+      "ext": "plt"
+    },
+    {
+      "name": "PLT2-X2",
+      "enc": "../plt2/build/plt2.exe c -t 2 -s 2",
+      "dec": "../plt2/build/plt2.exe d -t 2",
+      "ext": "plt"
+    },
+    {
+      "name": "HALIC",
+      "enc": "build/HALIC072e.exe",
+      "dec": "build/HALIC072d.exe",
+      "ext": "halic"
+    }
+  ],
+  "dataset": [
+    "C:/Users/pvv/datasets/professional_train_2020"
+  ],
+  "bench_dir": "M:/ramdrive"
+}
