@@ -13,6 +13,12 @@
       "ext": "lrn"
     },
     {
+      "name": "HALIC-CLONE",
+      "enc": "../plt2/build/pctx.exe c -k 0 -C 1 -I 1",
+      "dec": "../plt2/build/pctx.exe d",
+      "ext": "pcx"
+    },
+    {
       "name": "HALIC",
       "enc": "build/HALIC072e.exe",
       "dec": "build/HALIC072d.exe",
