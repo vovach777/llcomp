@@ -1,6 +1,18 @@
 {
   "bench_prog": [
     {
+      "name": "PCTX-HUF",
+      "enc": "../plt2/build/pctx.exe c -e huf",
+      "dec": "../plt2/build/pctx.exe d",
+      "ext": "pcx"
+    },
+    {
+      "name": "PCTX-FSE",
+      "enc": "../plt2/build/pctx.exe c -e fse",
+      "dec": "../plt2/build/pctx.exe d",
+      "ext": "pcx"
+    },
+    {
       "name": "PALIC-1",
       "enc": "../plt2/build/llrans.exe c -w 14",
       "dec": "../plt2/build/llrans.exe d",
