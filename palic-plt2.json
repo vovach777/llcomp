@@ -1,14 +1,8 @@
 {
   "bench_prog": [
     {
-      "name": "PCTX-HUF",
-      "enc": "../plt2/build/pctx.exe c -e huf",
-      "dec": "../plt2/build/pctx.exe d",
-      "ext": "pcx"
-    },
-    {
-      "name": "PCTX-FSE",
-      "enc": "../plt2/build/pctx.exe c -e fse",
+      "name": "PCTX",
+      "enc": "../plt2/build/pctx.exe c",
       "dec": "../plt2/build/pctx.exe d",
       "ext": "pcx"
     },
