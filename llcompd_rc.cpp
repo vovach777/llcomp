@@ -3,27 +3,31 @@
 #include <cassert>
 #include <fstream>
 #include <vector>
+#include <thread>
+#include <algorithm>
 #include "llcomp_rc.hpp"
 #include "netpbm.hpp"
 
 
 int main(int argc, char** argv) {
-    if (argc < 3) {
-        std::cerr << "Usage: " << argv[0] << " <input_file> <output_image>" << std::endl;
+    int threads = int(std::thread::hardware_concurrency()); std::vector<const char*> pos;   // [-t T] worker threads
+    for (int i = 1; i < argc; ++i) { std::string a = argv[i]; if (a == "-t" && i + 1 < argc) threads = std::max(1, std::stoi(argv[++i])); else pos.push_back(argv[i]); }
+    if (pos.size() < 2) {
+        std::cerr << "Usage: " << argv[0] << " [-t threads] <input_file> <output_image>" << std::endl;
         return 1;
     }
-    std::ifstream inFile(argv[1], std::ios::binary);
+    std::ifstream inFile(pos[0], std::ios::binary);
     if (!inFile) {
-        std::cerr << "Error opening input file: " << argv[1] << std::endl;
+        std::cerr << "Error opening input file: " << pos[0] << std::endl;
         return 1;
     }
     std::vector<uint8_t> compressed((std::istreambuf_iterator<char>(inFile)), std::istreambuf_iterator<char>());
     inFile.close();
 
     try {
-        auto [pixels, width, height, channels] = llcomp_rc::decompressImage(compressed);
+        auto [pixels, width, height, channels] = llcomp_rc::decompressImage(compressed, threads);
 
-        const char* outputFile = argv[2];
+        const char* outputFile = pos[1];
         char ppm_type = (channels == 3) ? '6' : (channels == 1) ? '5' : '6';
         Netpbm ppm(outputFile, ppm_type, width, height, 255);
         ppm.write(pixels.data(), pixels.size());
