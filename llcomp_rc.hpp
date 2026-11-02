@@ -30,6 +30,10 @@
 #elif defined(__AVX2__) && !defined(LLC_SCALAR)
 #include <immintrin.h>
 #define LLC_SIMD 1
+#elif !defined(LLC_SCALAR)
+#define SIMDE_X86_AVX2_ENABLE_NATIVE_ALIASES
+#include "avx2.h"
+#define LLC_SIMD 1
 #else
 #define LLC_SIMD 0
 #endif

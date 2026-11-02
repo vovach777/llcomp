@@ -17,8 +17,8 @@ target_compile_definitions(llcompd-s PRIVATE SELECT_MODEL=ModelSizeSmall)
 
 # RC engine (CABAC replaced by the PLT2 back-end on the tiny context): llcompc-rc / llcompd-rc
 find_package(Threads REQUIRED)
-add_executable(llcompc-rc llcompc_rc.cpp llcomp_rc.hpp llcomp_rc_tables.h netpbm.hpp)
-add_executable(llcompd-rc llcompd_rc.cpp llcomp_rc.hpp llcomp_rc_tables.h netpbm.hpp)
+add_executable(llcompc-rc llcompc_rc.cpp llcomp_rc.hpp llcomp_rc_tables.h netpbm.hpp avx2.h)
+add_executable(llcompd-rc llcompd_rc.cpp llcomp_rc.hpp llcomp_rc_tables.h netpbm.hpp avx2.h)
 foreach(t llcompc-rc llcompd-rc)
   target_link_libraries(${t} PRIVATE Threads::Threads)
   if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
