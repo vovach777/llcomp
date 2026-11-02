@@ -7,16 +7,16 @@
       "ext": "pcx"
     },
     {
-      "name": "PALIC-1",
-      "enc": "../plt2/build/llrans.exe c -w 14",
-      "dec": "../plt2/build/llrans.exe d",
-      "ext": "lrn"
-    },
-    {
       "name": "HALIC-CLONE",
       "enc": "../plt2/build/pctx.exe c -k 0 -C 1 -I 1",
       "dec": "../plt2/build/pctx.exe d",
       "ext": "pcx"
+    },
+    {
+      "name": "HLC",
+      "enc": "../plt2/build/hlc.exe c",
+      "dec": "../plt2/build/hlc.exe d",
+      "ext": "hlc"
     },
     {
       "name": "HALIC",
