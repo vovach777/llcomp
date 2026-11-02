@@ -1,15 +1,22 @@
 {
   "bench_prog": [
     {
+      "name": "PALIC-1",
+      "enc": "../plt2/build/llrans.exe c -w 14",
+      "dec": "../plt2/build/llrans.exe d",
+      "ext": "lrn"
+    },
+    {
       "name": "HALIC",
       "enc": "build/HALIC072e.exe",
       "dec": "build/HALIC072d.exe",
       "ext": "halic"
     },
-    { "name": "PLT2-1T-m0-x",
-       "enc": "../plt2/build/plt2.exe c -t 1 -m 0 -x", 
-       "dec": "../plt2/build/plt2.exe d -t 1",
-       "ext": "plt"
+    {
+      "name": "PLT2-1T-m0-x",
+      "enc": "../plt2/build/plt2.exe c -t 1 -m 0 -x",
+      "dec": "../plt2/build/plt2.exe d -t 1",
+      "ext": "plt"
     }
   ],
   "dataset": [

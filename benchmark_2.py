@@ -144,7 +144,7 @@ else: files.sort()
 if file_limit is not None: files = files[:file_limit]
 
 # --- Отрисовка шапки таблицы 1 ---
-FW, SW = 28, 11   # file-name / size column widths (compact: 5+ codecs fit in a 180-col console)
+FW, SW = 24, 10   # file-name / size column widths (compact: 6 codecs fit in a 170-col console)
 for prog in bench_progs: prog['cw'] = max(SW, len(prog['name']))
 header_str = f"| {'File':<{FW}} | {'Original':>{SW}} |"
 sep_str =    f"|{'-'*(FW+2)}|{'-'*(SW+2)}|"
