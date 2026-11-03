@@ -1,0 +1,44 @@
+{
+  "bench_prog": [
+    {
+      "name": "HLC-K2",
+      "enc": "../plt2/build/hlc.exe c -s -K 2",
+      "dec": "../plt2/build/hlc.exe d",
+      "ext": "hlc"
+    },
+    {
+      "name": "HLC-K1",
+      "enc": "../plt2/build/hlc.exe c -s -K 1",
+      "dec": "../plt2/build/hlc.exe d",
+      "ext": "hlc"
+    },
+    {
+      "name": "HLC-K3",
+      "enc": "../plt2/build/hlc.exe c -s -K 3",
+      "dec": "../plt2/build/hlc.exe d",
+      "ext": "hlc"
+    },
+    {
+      "name": "HLC-3str",
+      "enc": "../plt2/build/hlc.exe c -s -J 0",
+      "dec": "../plt2/build/hlc.exe d -d3 1",
+      "ext": "hlc"
+    },
+    {
+      "name": "HALIC-AVX",
+      "enc": "build/HALIC_ENCODE_V.0.7.2_ST_AVX.exe",
+      "dec": "build/HALIC_DECODE_V.0.7.2_ST_AVX.exe",
+      "ext": "halic"
+    },
+    {
+      "name": "HALIC-FAST-AVX",
+      "enc": "build/HALIC_ENCODE_V.0.7.2_ST_FAST_AVX.exe",
+      "dec": "build/HALIC_DECODE_V.0.7.2_ST_FAST_AVX.exe",
+      "ext": "halic"
+    }
+  ],
+  "dataset": [
+    "C:/Users/pvv/datasets/professional_train_2020"
+  ],
+  "bench_dir": "M:/ramdrive"
+}
