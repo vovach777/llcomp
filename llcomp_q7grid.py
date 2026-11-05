@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """q7 x q7 context grid of MED residuals over a corpus, Monte Carlo, one A4 sheet: Y on top, U/V below.
 
-usage:  python llcomp_q7grid.py <folder> [-n 100000] [-o q7grid.png] [--seed 1] [--max 0] [--folded]
+usage:  python llcomp_q7grid.py <folder> [-n 100000] [-o q7grid.png] [--seed 1] [--max 0]
+writes two A4 PNGs: <o> (full grid, signed) and <o>_folded.png (after the mirror, no sign)
 
 For every image (.png/.ppm/.pnm, RGB) N random pixels are taken. Per pixel, per plane (RCT as llcomp:
 V = R-G, U = B-G, Y = G + ((U+V) >> 2)): a = left, b = top, c = top-left (x = 0: a = c = b; y = 0: b = c = 0),
 MED residual e = P - median(a, a+b-c, b), wrapped (Y mod 256, U/V mod 512). Axes: q7(c-a) vertical, q7(c-b)
 horizontal, q7(x) = sign(x) * #(|x| >= 1, 4, 16) -> -16+ .. +16+. Each cell: share % and mean signed e.
 Title: cost of folding the point-symmetric pairs (q1,q2) ~ (-q1,-q2) with e -> -e (zero-order entropy of the pooled
-sample, tables over the whole corpus). --folded draws the grid after that mirror instead (pair shares, mean s*e).
+sample, tables over the whole corpus). The second sheet is the grid after that mirror (pair shares, mean s*e).
 Needs numpy, Pillow, matplotlib.
 """
 import argparse, glob, os, sys
@@ -45,7 +46,7 @@ def sample(path, n, rng):
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument('folder'); ap.add_argument('-n', type=int, default=100000)
     ap.add_argument('-o', default='q7grid.png'); ap.add_argument('--seed', type=int, default=1); ap.add_argument('--max', type=int, default=0)
-    ap.add_argument('--folded', action='store_true'); A = ap.parse_args()
+    A = ap.parse_args()
     files = sorted(f for f in glob.glob(os.path.join(A.folder, '*')) if f.lower().endswith(('.png', '.ppm', '.pnm')))
     if A.max: files = files[:A.max]
     if not files: sys.exit('no images')
@@ -68,7 +69,12 @@ def main():
         z1, k1 = np.concatenate(zf[t]), np.concatenate(kf[t]); z2, k2 = np.concatenate(zm[t]), np.concatenate(km[t])
         h1 = sum(ent(z1[k1 == v]) for v in np.unique(k1)); h2 = sum(ent(z2[k2 == v]) for v in np.unique(k2))
         cost[t] = 100 * h2 / h1 - 100
-    N_, S_ = (fc, fs) if A.folded else (cnt, se)
+    base, ext = os.path.splitext(A.o)
+    for folded, N_, S_, out in ((False, cnt, se, A.o), (True, fc, fs, base + '_folded' + (ext or '.png'))):
+        draw(folded, N_, S_, cost, out, len(files), A)
+    print(f'fold cost: Y {cost[0]:+.3f}%  U/V {cost[1]:+.3f}%')
+
+def draw(folded, N_, S_, cost, out, nfiles, A):
     cmap = LinearSegmentedColormap.from_list('b', ['#ffffff', '#cde2fb', '#86b6ef', '#3987e5', '#256abf', '#184f95', '#0d366b'])
     fig, axs = plt.subplots(2, 1, figsize=(8.27, 11.69), facecolor='#ffffff')
     for ax, (t, nm) in zip(axs, ((0, 'Y'), (1, 'U/V'))):
@@ -85,11 +91,11 @@ def main():
         ax.set_xticks(range(7)); ax.set_xticklabels(LAB, fontsize=8, color='#5e5d59'); ax.set_yticks(range(7)); ax.set_yticklabels(LAB, fontsize=8, color='#5e5d59')
         ax.set_xlabel('q(c−b)', color='#3d3d3a'); ax.set_ylabel('q(c−a)', color='#3d3d3a'); ax.tick_params(length=0)
         for s_ in ax.spines.values(): s_.set_color('#d8d7d0')
-        ax.set_title(f'{nm}: {"после зеркала — доля пары %, средний s·e" if A.folded else "доля %, средний e"}   склейка зеркальных пар {cost[t]:+.2f}% энтропии',
+        ax.set_title(f'{nm}: {"после зеркала (без знака) — доля пары %, средний s·e" if folded else "со знаком — доля %, средний e"}   склейка зеркальных пар {cost[t]:+.2f}% энтропии',
                      loc='left', fontsize=10, color='#1f1f1d')
-    fig.suptitle(f'q7 × q7, MED: {len(files)} изображений × {A.n} случайных пикселей  ({os.path.basename(os.path.normpath(A.folder))})', fontsize=11, color='#1f1f1d', x=0.02, ha='left')
-    plt.tight_layout(rect=(0, 0, 1, 0.97)); plt.savefig(A.o, dpi=300, facecolor='#ffffff')
-    print(f'wrote {A.o}   fold cost: Y {cost[0]:+.3f}%  U/V {cost[1]:+.3f}%')
+    fig.suptitle(f'q7 × q7, MED: {nfiles} изображений × {A.n} случайных пикселей  ({os.path.basename(os.path.normpath(A.folder))})', fontsize=11, color='#1f1f1d', x=0.02, ha='left')
+    plt.tight_layout(rect=(0, 0, 1, 0.97)); plt.savefig(out, dpi=300, facecolor='#ffffff'); plt.close(fig)
+    print(f'wrote {out}')
 
 if __name__ == '__main__':
     main()
