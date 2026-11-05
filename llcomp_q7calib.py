@@ -8,6 +8,8 @@ Asymmetry A(k) = 1/2 * sum over cells |share(q1,q2) - share(q2,q1)| in percent p
 diagonal 7-13-19-25-31-37-43; by the central mirror the other diagonal 1-9-...-49 follows). Printed per plane type:
 A at k = 1, best k and A there, and A for cheap integer forms (x + (x>>3) = 1.125, x + (x>>2) = 1.25, ...).
 Also the central-mirror asymmetry 1/2 * sum |share(q1,q2) - share(-q1,-q2)| for reference (a scale can't change it much).
+Second part: Givens rotation of the (c-a, c-b) plane by -10..+10 deg (edges 0.5 3.5 15.5, so 0 deg = the integer grid),
+asymmetry per angle and the share-weighted major-axis angle (45 deg = on the diagonal).
 Needs numpy, Pillow.
 """
 import argparse, glob, os, sys
@@ -31,6 +33,10 @@ def grid(ga, gb, k, intform=None):
     sb = intform(gb) if intform else np.sign(gb) * np.floor(np.abs(gb) * k + 1e-9)
     g = np.bincount((q7(ga) + 3) * 7 + q7(sb.astype(np.int64)) + 3, minlength=49).reshape(7, 7).astype(np.float64)
     return 100 * g / g.sum()
+def qh(x): a = np.abs(x); return (np.sign(x) * ((a >= 0.5).astype(np.int64) + (a >= 3.5) + (a >= 15.5))).astype(np.int64)
+def grid_rot(ga, gb, deg):
+    r = np.radians(deg); x = np.cos(r) * ga - np.sin(r) * gb; y = np.sin(r) * ga + np.cos(r) * gb
+    g = np.bincount((qh(x) + 3) * 7 + qh(y) + 3, minlength=49).reshape(7, 7).astype(np.float64); return 100 * g / g.sum()
 def asym(S): return 0.5 * np.abs(S - S.T).sum()
 def mirror(S): return 0.5 * np.abs(S - S[::-1, ::-1]).sum()
 
@@ -58,6 +64,9 @@ def main():
         print('   k:   ' + '  '.join(f'{k:.2f}' for k in ks[::10]))
         print('   A:   ' + '  '.join(f'{a:.2f}' for a in Ak[::10]))
         for lab, fn in INT: print(f'   c-b -> {lab:20s} A = {asym(grid(ga, gb, 0, fn)):.3f} pp')
+        C_ = np.cov(ga.astype(float), gb.astype(float)); th = 0.5 * np.degrees(np.arctan2(2 * C_[0, 1], C_[0, 0] - C_[1, 1]))
+        print(f'   rotation: covariance major axis {th:.1f} deg (45 = diagonal, would need {45 - th:+.1f} deg)')
+        for dg in (-10, -6, -4, -2, -1, 0, 1, 2, 4, 6, 10): print(f'     rotate {dg:+3d} deg: A = {asym(grid_rot(ga, gb, dg)):.3f} pp')
         print('   swapped pairs at best k (share %, k=1 -> best):')
         for (i1, j1) in ((4, 3), (5, 3), (6, 3), (5, 4), (6, 4), (6, 5), (4, 2), (5, 1)):
             print(f'     (q1,q2)=({i1 - 3:+d},{j1 - 3:+d}) vs ({j1 - 3:+d},{i1 - 3:+d}):  {S1[i1, j1]:.3f} / {S1[j1, i1]:.3f}  ->  {Sb[i1, j1]:.3f} / {Sb[j1, i1]:.3f}')
