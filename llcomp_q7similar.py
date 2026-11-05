@@ -45,14 +45,18 @@ def agglo(Hs, sizes):
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument('folder'); ap.add_argument('-n', type=int, default=100000)
     ap.add_argument('-o', default='q7similar.png'); ap.add_argument('--seed', type=int, default=1); ap.add_argument('--max', type=int, default=0)
+    ap.add_argument('--ext', default='1,4,16', help='c-b edges on the extremum side (c-b same sign as c-a; c-a = 0: c-b side as is), e.g. 1,3,12')
     ap.add_argument('--to', default='25,16,11,8,5'); Q.add_args(ap); A = ap.parse_args(); sizes = sorted({int(x) for x in A.to.split(',')}, reverse=True)
     files = sorted(f for f in glob.glob(os.path.join(A.folder, '*')) if f.lower().endswith(('.png', '.ppm', '.pnm')))
     if A.max: files = files[:A.max]
     if not files: sys.exit('no images')
-    rng = np.random.default_rng(A.seed); Hh = np.zeros((2, 49, M))
+    EX = [int(x) for x in A.ext.split(',')]; rng = np.random.default_rng(A.seed); Hh = np.zeros((2, 49, M))
     for i, f in enumerate(files):
         for t, ga, gb, e in Q.load(f, A.n, A.seed, A.cache, not A.no_cache):
-            q1, q2 = q7(ga.astype(np.int32)), q7(gb.astype(np.int32)); e = e.astype(np.int32)
+            ga = ga.astype(np.int32); gb = gb.astype(np.int32); e = e.astype(np.int32); q1, q2 = q7(ga), q7(gb)
+            if EX != [1, 4, 16]:
+                ext = (ga * gb > 0); ab = np.abs(gb); qx = np.sign(gb) * sum((ab >= t).astype(np.int32) for t in EX)
+                q2 = np.where(ext, qx, q2)
             k = (3 - q1) * 7 + (q2 + 3)                                     # sector - 1
             Hh[t] += np.bincount(k * M + np.minimum(np.abs(e), M - 1), minlength=49 * M).reshape(49, M)
         if (i + 1) % 50 == 0 or i + 1 == len(files): print(f'  {i + 1}/{len(files)}', flush=True)
@@ -62,14 +66,14 @@ def main():
     for t, nm in ((0, 'Y'), (1, 'U/V')):
         Hs = list(Hh[t]); D, e = merge_matrix(Hs); tot = e.sum(); P = 100 * D / tot
         n = Hh[t].sum(1); me = (Hh[t] * np.arange(M)).sum(1) / np.maximum(n, 1); order = np.argsort(me)
-        say(f'== {nm}: {int(n.sum())} samples, |e| bits total {tot / n.sum():.3f} per sample')
+        say(f'== {nm}: {int(n.sum())} samples, |e| bits total {tot / n.sum():.4f} per sample (49 sectors, extremum-side c-b edges {A.ext})')
         say('nearest sector (merge cost, % of the plane bits):')
         for k in order:
             P2 = P[k].copy(); P2[k] = np.inf; j = int(np.argmin(P2))
             say(f'  {k + 1:2d}  share {100 * n[k] / n.sum():5.2f}%  mean|e| {me[k]:6.2f}   ~ {j + 1:2d} ({P2[j]:.4f}%)')
         say('greedy merging (cheapest pair first):')
         for g, c, groups, hs in agglo(Hs, sizes):
-            say(f'  {g:2d} groups: cost {100 * c / tot:+.3f}% of {nm} bits')
+            say(f'  {g:2d} groups: cost {100 * c / tot:+.3f}% of {nm} bits = {(tot + c) / n.sum():.4f} bits per sample')
             gs = sorted(zip(groups, hs), key=lambda x: (x[1] * np.arange(M)).sum() / x[1].sum())
             for gr, h in gs: say(f'      mean|e| {(h * np.arange(M)).sum() / h.sum():6.2f}  share {100 * h.sum() / n.sum():5.2f}%  sectors {" ".join(map(str, gr))}')
         say()
