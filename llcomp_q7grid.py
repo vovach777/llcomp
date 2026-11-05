@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """q7 x q7 context grid of MED residuals over a corpus, Monte Carlo, one A4 sheet: Y on top, U/V below.
 
-usage:  python llcomp_q7grid.py <folder> [-n 100000] [-o q7grid.png] [--seed 1] [--max 0]
+usage:  python llcomp_q7grid.py <folder> [-n 100000] [-o q7grid.png] [--seed 1] [--max 0] [--kb 1.125]
+--kb K: c-b is stretched by K before q7 (|x|*K rounded down; 1.125 = x + (x>>3)) to even the grid about its diagonal
 writes two A4 PNGs: <o> (full grid, signed) and <o>_folded.png (after the mirror, no sign), and <o>.csv: per sector
 1..49 (row by row from the top-left: q(c-a) +16+ .. -16+, q(c-b) -16+ .. +16+) its flat cell |h|, mirror sign, and
 per plane type share %, mean e, mean |e|; and <o>_sectors.csv in the spreadsheet layout (Excel, decimal comma,
@@ -29,7 +30,7 @@ def ent(z):
     if z.size == 0: return 0.0
     _, c = np.unique(z, return_counts=True); return float(-(c * np.log2(c / c.sum())).sum())
 
-def sample(path, n, rng):
+def sample(path, n, rng, kb=1.0):
     a = np.asarray(Image.open(path).convert('RGB')).astype(np.int32)
     H, W = a.shape[:2]
     ys = rng.integers(0, H, n); xs = rng.integers(0, W, n)
@@ -43,12 +44,14 @@ def sample(path, n, rng):
         c = np.where(xs == 0, b, c)
         e = p - np.clip(a_ + b - c, np.minimum(a_, b), np.maximum(a_, b))
         e = ((e + 256) & 511) - 256 if n9 else ((e + 128) & 255) - 128
-        out.append((int(n9), q7(c - a_), q7(c - b), e))
+        g = c - b; g = np.sign(g) * np.floor(np.abs(g) * kb + 1e-9).astype(np.int32) if kb != 1.0 else g
+        out.append((int(n9), q7(c - a_), q7(g), e))
     return out
 
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument('folder'); ap.add_argument('-n', type=int, default=100000)
     ap.add_argument('-o', default='q7grid.png'); ap.add_argument('--seed', type=int, default=1); ap.add_argument('--max', type=int, default=0)
+    ap.add_argument('--kb', type=float, default=1.0)
     A = ap.parse_args()
     files = sorted(f for f in glob.glob(os.path.join(A.folder, '*')) if f.lower().endswith(('.png', '.ppm', '.pnm')))
     if A.max: files = files[:A.max]
@@ -57,7 +60,7 @@ def main():
     cnt = np.zeros((2, 7, 7)); se = np.zeros((2, 7, 7)); sa = np.zeros((2, 7, 7)); zf = {0: [], 1: []}; kf = {0: [], 1: []}; zm = {0: [], 1: []}; km = {0: [], 1: []}
     fc = np.zeros((2, 7, 7)); fs = np.zeros((2, 7, 7))
     for i, f in enumerate(files):
-        for t, q1, q2, e in sample(f, A.n, rng):
+        for t, q1, q2, e in sample(f, A.n, rng, A.kb):
             idx = (q1 + 3) * 7 + (q2 + 3)
             cnt[t] += np.bincount(idx, minlength=49).reshape(7, 7); se[t] += np.bincount(idx, weights=e, minlength=49).reshape(7, 7)
             sa[t] += np.bincount(idx, weights=np.abs(e), minlength=49).reshape(7, 7)
