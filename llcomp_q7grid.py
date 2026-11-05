@@ -4,7 +4,8 @@
 usage:  python llcomp_q7grid.py <folder> [-n 100000] [-o q7grid.png] [--seed 1] [--max 0]
 writes two A4 PNGs: <o> (full grid, signed) and <o>_folded.png (after the mirror, no sign), and <o>.csv: per sector
 1..49 (row by row from the top-left: q(c-a) +16+ .. -16+, q(c-b) -16+ .. +16+) its flat cell |h|, mirror sign, and
-per plane type share %, mean e, mean |e|
+per plane type share %, mean e, mean |e|; and <o>_sectors.csv in the spreadsheet layout (Excel, decimal comma,
+UTF-8 with BOM, sorted by the Y share): Сектор, s, q(c−a), q(c−b), Плоская ячейка |h|, Y %, U/V %, Y |e|, U/V |e|
 
 For every image (.png/.ppm/.pnm, RGB) N random pixels are taken. Per pixel, per plane (RCT as llcomp:
 V = R-G, U = B-G, Y = G + ((U+V) >> 2)): a = left, b = top, c = top-left (x = 0: a = c = b; y = 0: b = c = 0),
@@ -82,6 +83,17 @@ def main():
                 n_ = cnt[t, i, j]; row += [f'{100 * n_ / cnt[t].sum():.4f}', f'{se[t, i, j] / max(n_, 1):.4f}', f'{sa[t, i, j] / max(n_, 1):.4f}']
             fh.write(','.join(row) + '\n')
     print(f'wrote {base}.csv')
+    rows = []
+    for k in range(1, 50):
+        r, col = (k - 1) // 7, (k - 1) % 7; i, j = 6 - r, col; q1, q2 = i - 3, j - 3; h = q2 + 7 * q1
+        sh = [100 * cnt[t, i, j] / cnt[t].sum() for t in (0, 1)]; ma = [sa[t, i, j] / max(cnt[t, i, j], 1) for t in (0, 1)]
+        rows.append((sh[0], k, '+' if h >= 0 else '−', LAB[i], LAB[j], abs(h), sh[1], ma[0], ma[1]))
+    dc = lambda v, d: '"' + f'{v:.{d}f}'.replace('.', ',') + '"'
+    with open(base + '_sectors.csv', 'w', encoding='utf-8-sig', newline='') as fh:
+        fh.write('Сектор,s,q(c−a),q(c−b),Плоская ячейка |h|,"Y, %","U/V, %","Y, |e|","U/V, |e|"\r\n')
+        for y, k, sg, la, lb, fl, uv, my, mu in sorted(rows, key=lambda t: (-round(t[0], 1), -t[0])):
+            fh.write(f'{k},{sg},{la},{lb},{fl},{dc(y, 1)},{dc(uv, 1)},{dc(my, 2)},{dc(mu, 2)}\r\n')
+    print(f'wrote {base}_sectors.csv')
     for folded, N_, S_, out in ((False, cnt, se, A.o), (True, fc, fs, base + '_folded' + (ext or '.png'))):
         draw(folded, N_, S_, cost, out, len(files), A)
     print(f'fold cost: Y {cost[0]:+.3f}%  U/V {cost[1]:+.3f}%')
