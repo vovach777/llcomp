@@ -49,9 +49,9 @@ def _load(path, n, seed, cache, use_cache):
     st = os.stat(path); cf = os.path.join(cache, f'{os.path.basename(path)}_{n}_{seed}.npz')
     if os.path.exists(cf):
         try:
-            z = np.load(cf)
-            if int(z['size']) == st.st_size and int(z['mtime']) == int(st.st_mtime) and 'ea0' in z.files:
-                return [(int(z['t'][i]), z[f'ga{i}'], z[f'gb{i}'], z[f'e{i}'], z[f'ea{i}'], z[f'eb{i}']) for i in range(3)]
+            with np.load(cf) as z:                                   # closes the file: Windows can't replace an open one
+                if int(z['size']) == st.st_size and int(z['mtime']) == int(st.st_mtime) and 'ea0' in z.files:
+                    return [(int(z['t'][i]), z[f'ga{i}'], z[f'gb{i}'], z[f'e{i}'], z[f'ea{i}'], z[f'eb{i}']) for i in range(3)]
         except Exception: pass
     out = sample_raw(path, n, seed); os.makedirs(cache, exist_ok=True)
     d = {'size': st.st_size, 'mtime': int(st.st_mtime), 't': np.array([o[0] for o in out])}
