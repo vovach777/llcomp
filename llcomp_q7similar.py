@@ -20,6 +20,7 @@ from llcomp_q7grid import q7
 import llcomp_q7cache as Q
 
 M = 256                                   # |e| bins (U/V |e| above 255 go to the last bin)
+def qe(x, E): a = np.abs(x); return np.sign(x) * sum((a >= t).astype(np.int32) for t in E)
 def H(h): c = h[h > 0]; return float(-(c * np.log2(c / c.sum())).sum()) if c.size else 0.0
 def label(k): r, j = (k - 1) // 7, (k - 1) % 7; return k
 
@@ -46,14 +47,17 @@ def main():
     ap = argparse.ArgumentParser(); ap.add_argument('folder'); ap.add_argument('-n', type=int, default=100000)
     ap.add_argument('-o', default='q7similar.png'); ap.add_argument('--seed', type=int, default=1); ap.add_argument('--max', type=int, default=0)
     ap.add_argument('--ext', default='1,4,16', help='c-b edges on the extremum side (c-b same sign as c-a; c-a = 0: c-b side as is), e.g. 1,3,12')
+    ap.add_argument('--uv', default='1,4,16', help='q7 edges for the U/V planes (both axes), e.g. 1,2,8')
     ap.add_argument('--to', default='25,16,11,8,5'); Q.add_args(ap); A = ap.parse_args(); sizes = sorted({int(x) for x in A.to.split(',')}, reverse=True)
     files = sorted(f for f in glob.glob(os.path.join(A.folder, '*')) if f.lower().endswith(('.png', '.ppm', '.pnm')))
     if A.max: files = files[:A.max]
     if not files: sys.exit('no images')
-    EX = [int(x) for x in A.ext.split(',')]; rng = np.random.default_rng(A.seed); Hh = np.zeros((2, 49, M))
+    EX = [int(x) for x in A.ext.split(',')]; UV = [int(x) for x in A.uv.split(',')]; rng = np.random.default_rng(A.seed); Hh = np.zeros((2, 49, M))
     for i, f in enumerate(files):
         for t, ga, gb, e in Q.load(f, A.n, A.seed, A.cache, not A.no_cache):
-            ga = ga.astype(np.int32); gb = gb.astype(np.int32); e = e.astype(np.int32); q1, q2 = q7(ga), q7(gb)
+            ga = ga.astype(np.int32); gb = gb.astype(np.int32); e = e.astype(np.int32)
+            if t and UV != [1, 4, 16]: q1, q2 = qe(ga, UV), qe(gb, UV)
+            else: q1, q2 = q7(ga), q7(gb)
             if EX != [1, 4, 16]:
                 ext = (ga * gb > 0); ab = np.abs(gb); qx = np.sign(gb) * sum((ab >= t).astype(np.int32) for t in EX)
                 q2 = np.where(ext, qx, q2)
@@ -66,7 +70,7 @@ def main():
     for t, nm in ((0, 'Y'), (1, 'U/V')):
         Hs = list(Hh[t]); D, e = merge_matrix(Hs); tot = e.sum(); P = 100 * D / tot
         n = Hh[t].sum(1); me = (Hh[t] * np.arange(M)).sum(1) / np.maximum(n, 1); order = np.argsort(me)
-        say(f'== {nm}: {int(n.sum())} samples, |e| bits total {tot / n.sum():.4f} per sample (49 sectors, extremum-side c-b edges {A.ext})')
+        say(f'== {nm}: {int(n.sum())} samples, |e| bits total {tot / n.sum():.4f} per sample (49 sectors, extremum-side c-b edges {A.ext}, U/V edges {A.uv})')
         say('nearest sector (merge cost, % of the plane bits):')
         for k in order:
             P2 = P[k].copy(); P2[k] = np.inf; j = int(np.argmin(P2))
