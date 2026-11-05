@@ -47,17 +47,17 @@ def main():
     ap = argparse.ArgumentParser(); ap.add_argument('folder'); ap.add_argument('-n', type=int, default=100000)
     ap.add_argument('-o', default='q7similar.png'); ap.add_argument('--seed', type=int, default=1); ap.add_argument('--max', type=int, default=0)
     ap.add_argument('--ext', default='1,4,16', help='c-b edges on the extremum side (c-b same sign as c-a; c-a = 0: c-b side as is), e.g. 1,3,12')
+    ap.add_argument('--y', default='1,4,16', help='q7 edges for the Y plane (both axes)')
     ap.add_argument('--uv', default='1,4,16', help='q7 edges for the U/V planes (both axes), e.g. 1,2,8')
     ap.add_argument('--to', default='25,16,11,8,5'); Q.add_args(ap); A = ap.parse_args(); sizes = sorted({int(x) for x in A.to.split(',')}, reverse=True)
     files = sorted(f for f in glob.glob(os.path.join(A.folder, '*')) if f.lower().endswith(('.png', '.ppm', '.pnm')))
     if A.max: files = files[:A.max]
     if not files: sys.exit('no images')
-    EX = [int(x) for x in A.ext.split(',')]; UV = [int(x) for x in A.uv.split(',')]; rng = np.random.default_rng(A.seed); Hh = np.zeros((2, 49, M))
+    EX = [int(x) for x in A.ext.split(',')]; UV = [int(x) for x in A.uv.split(',')]; YE = [int(x) for x in A.y.split(',')]; rng = np.random.default_rng(A.seed); Hh = np.zeros((2, 49, M))
     for i, f in enumerate(files):
         for t, ga, gb, e in Q.load(f, A.n, A.seed, A.cache, not A.no_cache):
             ga = ga.astype(np.int32); gb = gb.astype(np.int32); e = e.astype(np.int32)
-            if t and UV != [1, 4, 16]: q1, q2 = qe(ga, UV), qe(gb, UV)
-            else: q1, q2 = q7(ga), q7(gb)
+            EE = UV if t else YE; q1, q2 = (q7(ga), q7(gb)) if EE == [1, 4, 16] else (qe(ga, EE), qe(gb, EE))
             if EX != [1, 4, 16]:
                 ext = (ga * gb > 0); ab = np.abs(gb); qx = np.sign(gb) * sum((ab >= t).astype(np.int32) for t in EX)
                 q2 = np.where(ext, qx, q2)
@@ -70,7 +70,7 @@ def main():
     for t, nm in ((0, 'Y'), (1, 'U/V')):
         Hs = list(Hh[t]); D, e = merge_matrix(Hs); tot = e.sum(); P = 100 * D / tot
         n = Hh[t].sum(1); me = (Hh[t] * np.arange(M)).sum(1) / np.maximum(n, 1); order = np.argsort(me)
-        say(f'== {nm}: {int(n.sum())} samples, |e| bits total {tot / n.sum():.4f} per sample (49 sectors, extremum-side c-b edges {A.ext}, U/V edges {A.uv})')
+        say(f'== {nm}: {int(n.sum())} samples, |e| bits total {tot / n.sum():.4f} per sample (49 sectors, extremum-side c-b edges {A.ext}, Y edges {A.y}, U/V edges {A.uv})')
         say('nearest sector (merge cost, % of the plane bits):')
         for k in order:
             P2 = P[k].copy(); P2[k] = np.inf; j = int(np.argmin(P2))
