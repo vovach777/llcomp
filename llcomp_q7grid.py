@@ -2,7 +2,9 @@
 """q7 x q7 context grid of MED residuals over a corpus, Monte Carlo, one A4 sheet: Y on top, U/V below.
 
 usage:  python llcomp_q7grid.py <folder> [-n 100000] [-o q7grid.png] [--seed 1] [--max 0]
-writes two A4 PNGs: <o> (full grid, signed) and <o>_folded.png (after the mirror, no sign)
+writes two A4 PNGs: <o> (full grid, signed) and <o>_folded.png (after the mirror, no sign), and <o>.csv: per sector
+1..49 (row by row from the top-left: q(c-a) +16+ .. -16+, q(c-b) -16+ .. +16+) its flat cell |h|, mirror sign, and
+per plane type share %, mean e, mean |e|
 
 For every image (.png/.ppm/.pnm, RGB) N random pixels are taken. Per pixel, per plane (RCT as llcomp:
 V = R-G, U = B-G, Y = G + ((U+V) >> 2)): a = left, b = top, c = top-left (x = 0: a = c = b; y = 0: b = c = 0),
@@ -51,12 +53,13 @@ def main():
     if A.max: files = files[:A.max]
     if not files: sys.exit('no images')
     rng = np.random.default_rng(A.seed)
-    cnt = np.zeros((2, 7, 7)); se = np.zeros((2, 7, 7)); zf = {0: [], 1: []}; kf = {0: [], 1: []}; zm = {0: [], 1: []}; km = {0: [], 1: []}
+    cnt = np.zeros((2, 7, 7)); se = np.zeros((2, 7, 7)); sa = np.zeros((2, 7, 7)); zf = {0: [], 1: []}; kf = {0: [], 1: []}; zm = {0: [], 1: []}; km = {0: [], 1: []}
     fc = np.zeros((2, 7, 7)); fs = np.zeros((2, 7, 7))
     for i, f in enumerate(files):
         for t, q1, q2, e in sample(f, A.n, rng):
             idx = (q1 + 3) * 7 + (q2 + 3)
             cnt[t] += np.bincount(idx, minlength=49).reshape(7, 7); se[t] += np.bincount(idx, weights=e, minlength=49).reshape(7, 7)
+            sa[t] += np.bincount(idx, weights=np.abs(e), minlength=49).reshape(7, 7)
             h = q2 + 7 * q1; s = np.where(h < 0, -1, 1); fi = (s * q1 + 3) * 7 + (s * q2 + 3)
             fc[t] += np.bincount(fi, minlength=49).reshape(7, 7); fs[t] += np.bincount(fi, weights=s * e, minlength=49).reshape(7, 7)
             M = 511 if t else 255; H_ = 256 if t else 128
@@ -70,6 +73,15 @@ def main():
         h1 = sum(ent(z1[k1 == v]) for v in np.unique(k1)); h2 = sum(ent(z2[k2 == v]) for v in np.unique(k2))
         cost[t] = 100 * h2 / h1 - 100
     base, ext = os.path.splitext(A.o)
+    with open(base + '.csv', 'w', encoding='utf-8') as fh:
+        fh.write('sector,q_c_a,q_c_b,flat_cell,sign,Y_share_pct,Y_mean_e,Y_mean_abs_e,UV_share_pct,UV_mean_e,UV_mean_abs_e\n')
+        for k in range(1, 50):
+            r, col = (k - 1) // 7, (k - 1) % 7; i, j = 6 - r, col; q1, q2 = i - 3, j - 3; h = q2 + 7 * q1
+            row = [str(k), LAB[i], LAB[j], str(abs(h)), '+' if h >= 0 else '-']
+            for t in (0, 1):
+                n_ = cnt[t, i, j]; row += [f'{100 * n_ / cnt[t].sum():.4f}', f'{se[t, i, j] / max(n_, 1):.4f}', f'{sa[t, i, j] / max(n_, 1):.4f}']
+            fh.write(','.join(row) + '\n')
+    print(f'wrote {base}.csv')
     for folded, N_, S_, out in ((False, cnt, se, A.o), (True, fc, fs, base + '_folded' + (ext or '.png'))):
         draw(folded, N_, S_, cost, out, len(files), A)
     print(f'fold cost: Y {cost[0]:+.3f}%  U/V {cost[1]:+.3f}%')
