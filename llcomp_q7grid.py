@@ -14,11 +14,14 @@ MED residual e = P - median(a, a+b-c, b), wrapped (Y mod 256, U/V mod 512). Axes
 horizontal, q7(x) = sign(x) * #(|x| >= 1, 4, 16) -> -16+ .. +16+. Each cell: share % and mean signed e.
 Title: cost of folding the point-symmetric pairs (q1,q2) ~ (-q1,-q2) with e -> -e (zero-order entropy of the pooled
 sample, tables over the whole corpus). The second sheet is the grid after that mirror (pair shares, mean s*e).
+Samples are cached (see llcomp_q7cache.py: --cache, default ~/.cache/clic-q7; --no-cache).
 Needs numpy, Pillow, matplotlib.
 """
 import argparse, glob, os, sys
 import numpy as np
 from PIL import Image
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import llcomp_q7cache as Q
 import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 
@@ -51,7 +54,7 @@ def sample(path, n, rng, kb=1.0):
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument('folder'); ap.add_argument('-n', type=int, default=100000)
     ap.add_argument('-o', default='q7grid.png'); ap.add_argument('--seed', type=int, default=1); ap.add_argument('--max', type=int, default=0)
-    ap.add_argument('--kb', type=float, default=1.0)
+    ap.add_argument('--kb', type=float, default=1.0); Q.add_args(ap)
     A = ap.parse_args()
     files = sorted(f for f in glob.glob(os.path.join(A.folder, '*')) if f.lower().endswith(('.png', '.ppm', '.pnm')))
     if A.max: files = files[:A.max]
@@ -60,7 +63,10 @@ def main():
     cnt = np.zeros((2, 7, 7)); se = np.zeros((2, 7, 7)); sa = np.zeros((2, 7, 7)); zf = {0: [], 1: []}; kf = {0: [], 1: []}; zm = {0: [], 1: []}; km = {0: [], 1: []}
     fc = np.zeros((2, 7, 7)); fs = np.zeros((2, 7, 7))
     for i, f in enumerate(files):
-        for t, q1, q2, e in sample(f, A.n, rng, A.kb):
+        for t, ga, gb, e in Q.load(f, A.n, A.seed, A.cache, not A.no_cache):
+            ga = ga.astype(np.int32); gb = gb.astype(np.int32); e = e.astype(np.int32)
+            if A.kb != 1.0: gb = np.sign(gb) * np.floor(np.abs(gb) * A.kb + 1e-9).astype(np.int32)
+            q1, q2 = q7(ga), q7(gb)
             idx = (q1 + 3) * 7 + (q2 + 3)
             cnt[t] += np.bincount(idx, minlength=49).reshape(7, 7); se[t] += np.bincount(idx, weights=e, minlength=49).reshape(7, 7)
             sa[t] += np.bincount(idx, weights=np.abs(e), minlength=49).reshape(7, 7)

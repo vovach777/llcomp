@@ -10,11 +10,13 @@ A at k = 1, best k and A there, and A for cheap integer forms (x + (x>>3) = 1.12
 Also the central-mirror asymmetry 1/2 * sum |share(q1,q2) - share(-q1,-q2)| for reference (a scale can't change it much).
 Second part: Givens rotation of the (c-a, c-b) plane by -10..+10 deg (edges 0.5 3.5 15.5, so 0 deg = the integer grid),
 asymmetry per angle and the share-weighted major-axis angle (45 deg = on the diagonal).
+Samples are cached (llcomp_q7cache.py: --cache, default ~/.cache/clic-q7; --no-cache).
 Needs numpy, Pillow.
 """
 import argparse, glob, os, sys
 import numpy as np
-from PIL import Image
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import llcomp_q7cache as Q
 
 def q7(x): a = np.abs(x); return np.sign(x) * ((a >= 1).astype(np.int32) + (a >= 4) + (a >= 16))
 
@@ -47,13 +49,13 @@ INT = [('x', lambda x: x), ('x + (x>>4)  1.0625', lambda x: np.sign(x) * (np.abs
 
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument('folder'); ap.add_argument('-n', type=int, default=100000)
-    ap.add_argument('--seed', type=int, default=1); ap.add_argument('--max', type=int, default=0); A = ap.parse_args()
+    ap.add_argument('--seed', type=int, default=1); ap.add_argument('--max', type=int, default=0); Q.add_args(ap); A = ap.parse_args()
     files = sorted(f for f in glob.glob(os.path.join(A.folder, '*')) if f.lower().endswith(('.png', '.ppm', '.pnm')))
     if A.max: files = files[:A.max]
     if not files: sys.exit('no images')
     rng = np.random.default_rng(A.seed); D = {0: ([], []), 1: ([], [])}
     for i, f in enumerate(files):
-        for t, ga, gb in sample(f, A.n, rng): D[t][0].append(ga); D[t][1].append(gb)
+        for t, ga, gb, _ in Q.load(f, A.n, A.seed, A.cache, not A.no_cache): D[t][0].append(ga.astype(np.int64)); D[t][1].append(gb.astype(np.int64))
         if (i + 1) % 50 == 0 or i + 1 == len(files): print(f'  {i + 1}/{len(files)}', flush=True)
     ks = np.round(np.arange(0.80, 1.601, 0.01), 2)
     for t, nm in ((0, 'Y'), (1, 'U/V')):

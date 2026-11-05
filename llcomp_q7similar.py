@@ -9,13 +9,15 @@ in % of the total |e| bits of that plane type (0 = identical shapes; it weights 
 Output: <o> = A4 PNG, per plane type a 49 x 49 merge-cost map (sectors ordered by mean |e|) and the |e| curves;
 <o>.txt = nearest neighbour of every sector and greedy agglomerative merging (always the cheapest pair) down to
 the sizes in --to, with the groups and the cumulative cost.
+Samples are cached (llcomp_q7cache.py: --cache, default ~/.cache/clic-q7; --no-cache).
 Needs numpy, Pillow, matplotlib.
 """
 import argparse, glob, os, sys
 import numpy as np
 import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from llcomp_q7grid import sample
+from llcomp_q7grid import q7
+import llcomp_q7cache as Q
 
 M = 256                                   # |e| bins (U/V |e| above 255 go to the last bin)
 def H(h): c = h[h > 0]; return float(-(c * np.log2(c / c.sum())).sum()) if c.size else 0.0
@@ -43,13 +45,14 @@ def agglo(Hs, sizes):
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument('folder'); ap.add_argument('-n', type=int, default=100000)
     ap.add_argument('-o', default='q7similar.png'); ap.add_argument('--seed', type=int, default=1); ap.add_argument('--max', type=int, default=0)
-    ap.add_argument('--to', default='25,16,11,8,5'); A = ap.parse_args(); sizes = sorted({int(x) for x in A.to.split(',')}, reverse=True)
+    ap.add_argument('--to', default='25,16,11,8,5'); Q.add_args(ap); A = ap.parse_args(); sizes = sorted({int(x) for x in A.to.split(',')}, reverse=True)
     files = sorted(f for f in glob.glob(os.path.join(A.folder, '*')) if f.lower().endswith(('.png', '.ppm', '.pnm')))
     if A.max: files = files[:A.max]
     if not files: sys.exit('no images')
     rng = np.random.default_rng(A.seed); Hh = np.zeros((2, 49, M))
     for i, f in enumerate(files):
-        for t, q1, q2, e in sample(f, A.n, rng):
+        for t, ga, gb, e in Q.load(f, A.n, A.seed, A.cache, not A.no_cache):
+            q1, q2 = q7(ga.astype(np.int32)), q7(gb.astype(np.int32)); e = e.astype(np.int32)
             k = (3 - q1) * 7 + (q2 + 3)                                     # sector - 1
             Hh[t] += np.bincount(k * M + np.minimum(np.abs(e), M - 1), minlength=49 * M).reshape(49, M)
         if (i + 1) % 50 == 0 or i + 1 == len(files): print(f'  {i + 1}/{len(files)}', flush=True)
