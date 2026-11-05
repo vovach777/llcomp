@@ -1,28 +1,17 @@
 {
   "bench_prog": [
+
     {
-      "name": "HLC-256x128",
-      "enc": "../plt2/build/hlc.exe c -tw 256 -th 128",
-      "dec": "../plt2/build/hlc.exe d",
-      "ext": "hlc"
-    },
-    {
-      "name": "HLC-256x64",
-      "enc": "../plt2/build/hlc.exe c -tw 256 -th 64",
-      "dec": "../plt2/build/hlc.exe d",
-      "ext": "hlc"
-    },
-    {
-      "name": "HLC-128x128",
-      "enc": "../plt2/build/hlc.exe c -tw 128 -th 128",
-      "dec": "../plt2/build/hlc.exe d",
-      "ext": "hlc"
-    },
-    {
-      "name": "HALIC-AVX",
-      "enc": "build/HALIC_ENCODE_V.0.7.2_ST_AVX.exe",
+      "name": "HALIC-MED-YCoCg",
+      "enc": "build/HALIC_ENC_MED_YCoCg.exe",
       "dec": "build/HALIC_DECODE_V.0.7.2_ST_AVX.exe",
       "ext": "halic"
+    },
+    {
+      "name": "HLC-p1",
+      "enc": "../plt2/build/hlc.exe c -P 1 -C 1",
+      "dec": "../plt2/build/hlc.exe d",
+      "ext": "hlc"
     }
   ],
   "dataset": [
