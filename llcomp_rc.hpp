@@ -15,7 +15,8 @@
 //  stream interleaved by deterministic slot reservation (RC: 4 bytes at start, 1 per renorm shift; bit writer:
 //  8 bytes when the first bit of a new word is written). Nothing is moved or glued except strip concatenation.
 //
-//  File: magic (0x77 + 16) | channels | u16 W | u16 H (as llcomp) | u8 strips (0 = W/512) | u32 len[N] | strips.
+//  Context modes 0..3 (-x): see nctx_of below; 0 = tiny (default, old files).
+//  File: magic (0x77 + 16) | channels + (mode << 4) | u16 W | u16 H (as llcomp) | u8 strips (0 = W/512) | u32 len[N] | strips.
 #pragma once
 #include <algorithm>
 #include <atomic>
@@ -44,6 +45,7 @@
 #define LLC_SIMD 0
 #endif
 #include "llcomp_rc_tables.h"
+#include "llcomp_fse_groups.h"   // kGroups: PLT2 4-D cell -> 8 groups (CLIC calibration)
 
 namespace llcomp_rc {
 using namespace llcomp_rc_tab;
@@ -62,7 +64,18 @@ struct Static {
 inline const Static& S() { static const Static s; return s; }
 
 // ------------------------------------------------------------------ adaptive CDF (31 letters, cum[31] = 32768)
-constexpr int NL = 31, R0 = 4, RMAX = 8, NCTX = 63 * 9;
+constexpr int NL = 31, R0 = 4, RMAX = 8;
+// context modes (-x, stored in the high nibble of the channels byte; 0 = the original tiny context, old files):
+//  0 tiny: q5 mirrored (63) x Enb (9)                                    567
+//  1 4d:   PLT2 q7(c-a) x q7(c-b) x q7(d-b), mirrored by the tiny sign, x error level of
+//          max(z top-left, z top, z top-right) (zigzag of s*e; thresholds Y 8 32, U/V 3 8)         343 x 3
+//  2 4dE:  the same q7 gradients x llcomp's Enb (9)                                                343 x 9
+//  3 g8:   mode 1 unmirrored -> the 8 FSE groups of PLT2 (what the static coder uses)              8
+constexpr int NMODES = 4;
+constexpr int nctx_of(int mode) { return mode == 0 ? 63 * 9 : mode == 1 ? 343 * 3 : mode == 2 ? 343 * 9 : 8; }
+struct Q7T { int8_t q[2][2048]; Q7T() { static const int E[2][3] = {{1, 3, 10}, {1, 3, 7}};
+    for (int t = 0; t < 2; ++t) for (int g = -1024; g < 1024; ++g) { int a = g < 0 ? -g : g, v = (a >= E[t][0]) + (a >= E[t][1]) + (a >= E[t][2]); q[t][g + 1024] = int8_t(g < 0 ? -v : v); } } };
+inline const Q7T& Q7() { static const Q7T t; return t; }
 struct alignas(64) Cdf { uint16_t c[32]; };
 LLC_AI int rate_of(uint16_t& cnt) {
     int r = R0 + (cnt > 15) + (cnt > 31) + (cnt > 63) + (cnt > 127) + (cnt > 255) + (cnt > 511);
@@ -118,7 +131,7 @@ LLC_AI int cdf_find(const Cdf& d, uint32_t v) {
 }
 struct Model {
     std::vector<Cdf> cdf; std::vector<uint16_t> cnt;
-    Model() : cdf(NCTX), cnt(NCTX, 0) { for (auto& d : cdf) { for (int i = 0; i < 31; ++i) d.c[i] = uint16_t(i * 32768 / 31); d.c[31] = 32768; } }
+    explicit Model(int n) : cdf(n), cnt(n, 0) { for (auto& d : cdf) { for (int i = 0; i < 31; ++i) d.c[i] = uint16_t(i * 32768 / 31); d.c[31] = 32768; } }
 };
 
 // ------------------------------------------------------------------ strip buffer, range coder (hybrid carry), bits
@@ -170,27 +183,45 @@ struct BitR {
 };
 
 // ------------------------------------------------------------------ channel (KIND 0: 8-bit luma-like, 1: 9-bit chroma)
-template <int KIND>
+template <int KIND, int MODE = 0>
 struct Chan {
     static constexpr int G = KIND, HALF = KIND ? 256 : 128, MASK = KIND ? 511 : 255, MID = KIND ? 0 : 128, T1 = 0, T2 = KIND ? 4 : 3;
-    Model* M; std::vector<int16_t> ring; std::vector<uint16_t> e0, e1; int w;
-    int16_t* P; const int16_t* Q; uint16_t* Ec; const uint16_t* Ep;
-    Chan(Model* m, int w_) : M(m), ring(2 * size_t(w_)), e0(w_), e1(w_), w(w_) {}
-    LLC_AI void row(int y) { P = ring.data() + (y & 1) * w; Q = y ? ring.data() + ((y - 1) & 1) * w : P; Ec = (y & 1) ? e1.data() : e0.data(); Ep = (y & 1) ? e0.data() : e1.data(); }
+    static constexpr int VT1 = KIND ? 3 : 8, VT2 = KIND ? 8 : 32;          // modes 1, 3: error levels on z (zigzag)
+    Model* M; std::vector<int16_t> ring; std::vector<uint16_t> e0, e1, z0, z1; int w;
+    int16_t* P; const int16_t* Q; uint16_t* Ec; const uint16_t* Ep; uint16_t* Zc; const uint16_t* Zp;
+    Chan(Model* m, int w_) : M(m), ring(2 * size_t(w_)), e0(w_), e1(w_), z0(size_t(w_) + 2, 0), z1(size_t(w_) + 2, 0), w(w_) {}
+    LLC_AI void row(int y) { P = ring.data() + (y & 1) * w; Q = y ? ring.data() + ((y - 1) & 1) * w : P; Ec = (y & 1) ? e1.data() : e0.data(); Ep = (y & 1) ? e0.data() : e1.data();
+        Zc = ((y & 1) ? z1.data() : z0.data()) + 1; Zp = ((y & 1) ? z0.data() : z1.data()) + 1;   // halo 0 at -1 and w; row -1 = 0
+        if (y == 0) std::fill(z1.begin(), z1.end(), uint16_t(0)); }
     static LLC_AI int q5(int g) { int a = g < 0 ? -g : g, s = (g > 0) - (g < 0); return s * ((a > T1) + (a > T2)); }
     LLC_AI void ctx(int x, int y, int& pred, int& cx, int& s) const {
         int a, b, c, d, el = 0, et = 0;
         if (y == 0) { a = x ? P[x - 1] : MID; b = c = d = a; if (x) el = Ec[x - 1]; }
         else { b = Q[x]; if (x == 0) { a = c = b; } else { a = P[x - 1]; c = Q[x - 1]; el = Ec[x - 1]; } d = (x + 1 < w) ? Q[x + 1] : b; et = Ep[x]; }
         int mn = a < b ? a : b, mx = a < b ? b : a, pr = a + b - c; pred = pr < mn ? mn : (pr > mx ? mx : pr);
-        int idx = (q5(a - c) + 2) * 25 + (q5(c - b) + 2) * 5 + (q5(d - b) + 2);
-        s = 1; if (idx > 62) { idx = 124 - idx; s = -1; }
-        cx = idx * 9 + (el > et ? el : et);
+        if (MODE == 0) {
+            int idx = (q5(a - c) + 2) * 25 + (q5(c - b) + 2) * 5 + (q5(d - b) + 2);
+            s = 1; if (idx > 62) { idx = 124 - idx; s = -1; }
+            cx = idx * 9 + (el > et ? el : et);
+        } else {
+            const int8_t* q = Q7().q[G] + 1024; const int ga = c - a, gb = c - b;
+            int qa = q[ga], qb = q[gb], qd = q[d - b];
+            s = ga ? (ga > 0 ? 1 : -1) : (gb < 0 ? -1 : 1);                 // PLT2 tiny sign
+            if (MODE != 3 && s < 0) { qa = -qa; qb = -qb; qd = -qd; }          // mirror: the cell of -grads, symbol s * e
+            const int cell = ((3 - qa) * 7 + qb + 3) * 7 + qd + 3;
+            if (MODE == 2) cx = cell * 9 + (el > et ? el : et);
+            else {
+                int v = 0; if (y) { v = Zp[x - 1] > Zp[x] ? Zp[x - 1] : Zp[x]; v = v > Zp[x + 1] ? v : Zp[x + 1]; }
+                const int lev = (v >= VT1) + (v >= VT2);
+                cx = MODE == 1 ? cell * 3 + lev : llcomp_fse::kGroups[G][cell * 3 + lev];
+            }
+        }
     }
     LLC_AI void enc(Buf& B, RcEnc& E, BitW& Bw, int x, int y) {
         int pred, cx, s; ctx(x, y, pred, cx, s);
         int e = ((P[x] - pred + HALF) & MASK) - HALF;
         Ec[x] = S().bw8[e < 0 ? -e : e];
+        if (MODE == 1 || MODE == 3) { int se = s * e; Zc[x] = uint16_t(se >= 0 ? 2 * se : -2 * se - 1); }
         uint16_t q = ENC31[G][s * e + 256]; int l = q & 31;
         Cdf& d = M->cdf[cx];
         E.put(B, d.c[l], d.c[l + 1] - d.c[l]);
@@ -207,6 +238,7 @@ struct Chan {
         int a = LO31[G][l];
         if (int nb = RAW31[G][l]) a += int(R.get(b, nx, nb));
         Ec[x] = S().bw8[a];
+        if (MODE == 1 || MODE == 3) { int se = SIGN31[G][l] * a; Zc[x] = uint16_t(se >= 0 ? 2 * se : -2 * se - 1); }
         int vv = pred + s * SIGN31[G][l] * a;
         P[x] = int16_t(KIND ? (((vv + 256) & 511) - 256) : (vv & 255));
     }
@@ -230,13 +262,13 @@ template <class F> void parallel_for(int n, int threads, F f) {
 }
 
 // channel layout per pixel: CH = 1 (gray), 3 (RGB -> Y, U, V), 4 (RGBA -> Y, U, V, A)
-template <int CH>
+template <int CH, int MODE>
 std::vector<uint8_t> enc_strip(const uint8_t* img, int W, int x0, int w, int H) {
     Buf B; B.b.resize(size_t(w) * H * CH / 2 + 256);
     constexpr int NR = CH == 1 ? 1 : CH;                    // range coders
     RcEnc E[NR]; BitW Bw; for (auto& e : E) e.init(B);
-    Model mY, mC, mA;
-    Chan<0> cy(&mY, w); Chan<1> cu(&mC, w), cv(&mC, w); Chan<0> ca(&mA, w);
+    Model mY(nctx_of(MODE)), mC(nctx_of(MODE)), mA(nctx_of(MODE));
+    Chan<0, MODE> cy(&mY, w); Chan<1, MODE> cu(&mC, w), cv(&mC, w); Chan<0, MODE> ca(&mA, w);
     for (int y = 0; y < H; ++y) {
         cy.row(y); if (CH >= 3) { cu.row(y); cv.row(y); } if (CH == 4) ca.row(y);
         const uint8_t* p = img + (size_t(y) * W + x0) * CH;
@@ -254,12 +286,12 @@ std::vector<uint8_t> enc_strip(const uint8_t* img, int W, int x0, int w, int H) 
     for (auto& e : E) e.flush(B);
     Bw.flush(B); B.b.resize(B.next); return std::move(B.b);
 }
-template <int CH>
+template <int CH, int MODE>
 void dec_strip(const uint8_t* b, uint8_t* img, int W, int x0, int w, int H) {
     constexpr int NR = CH == 1 ? 1 : CH;
     RcDec D[NR]; BitR R; uint32_t n = 0; for (auto& d : D) d.init(b, n);
-    Model mY, mC, mA;
-    Chan<0> cy(&mY, w); Chan<1> cu(&mC, w), cv(&mC, w); Chan<0> ca(&mA, w);
+    Model mY(nctx_of(MODE)), mC(nctx_of(MODE)), mA(nctx_of(MODE));
+    Chan<0, MODE> cy(&mY, w); Chan<1, MODE> cu(&mC, w), cv(&mC, w); Chan<0, MODE> ca(&mA, w);
     for (int y = 0; y < H; ++y) {
         cy.row(y); if (CH >= 3) { cu.row(y); cv.row(y); } if (CH == 4) ca.row(y);
         for (int x = 0; x < w; ++x) {
@@ -276,17 +308,26 @@ void dec_strip(const uint8_t* b, uint8_t* img, int W, int x0, int w, int H) {
     }
 }
 
+template <int CH, int M> std::vector<uint8_t> enc_strip_m(const uint8_t* img, int W, int x0, int w, int H, int mode) {
+    if constexpr (M + 1 < NMODES) { if (mode != M) return enc_strip_m<CH, M + 1>(img, W, x0, w, H, mode); }
+    return enc_strip<CH, M>(img, W, x0, w, H);
+}
+template <int CH, int M> void dec_strip_m(const uint8_t* b, uint8_t* img, int W, int x0, int w, int H, int mode) {
+    if constexpr (M + 1 < NMODES) { if (mode != M) return dec_strip_m<CH, M + 1>(b, img, W, x0, w, H, mode); }
+    dec_strip<CH, M>(b, img, W, x0, w, H);
+}
 inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& img, int width, int height, int channels,
-                                          int threads = int(std::thread::hardware_concurrency()), int nstrips = 0) {
+                                          int threads = int(std::thread::hardware_concurrency()), int nstrips = 0, int mode = 0) {
+    if (mode < 0 || mode >= NMODES) throw std::invalid_argument("bad context mode");
     if (channels != 1 && channels != 3 && channels != 4) throw std::invalid_argument("channels must be 1, 3 or 4");
     if (width <= 0 || height <= 0 || width > 65535 || height > 65535 || img.size() != size_t(width) * height * channels) throw std::invalid_argument("bad image size");
     nstrips = std::max(0, std::min(nstrips, 255)); Strips st = strips_for(width, nstrips);
     std::vector<std::vector<uint8_t>> s(st.n);
     parallel_for(st.n, threads, [&](int i) {
         int x0 = st.x(i), w = st.w(i);
-        s[i] = channels == 1 ? enc_strip<1>(img.data(), width, x0, w, height) : channels == 3 ? enc_strip<3>(img.data(), width, x0, w, height) : enc_strip<4>(img.data(), width, x0, w, height);
+        s[i] = channels == 1 ? enc_strip_m<1, 0>(img.data(), width, x0, w, height, mode) : channels == 3 ? enc_strip_m<3, 0>(img.data(), width, x0, w, height, mode) : enc_strip_m<4, 0>(img.data(), width, x0, w, height, mode);
     });
-    std::vector<uint8_t> o = {magic_rc, uint8_t(channels), uint8_t(width), uint8_t(width >> 8), uint8_t(height), uint8_t(height >> 8), uint8_t(nstrips)};
+    std::vector<uint8_t> o = {magic_rc, uint8_t(channels | mode << 4), uint8_t(width), uint8_t(width >> 8), uint8_t(height), uint8_t(height >> 8), uint8_t(nstrips)};
     for (auto& b : s) for (int k = 0; k < 4; ++k) o.push_back(uint8_t(b.size() >> (8 * k)));
     for (auto& b : s) o.insert(o.end(), b.begin(), b.end());
     return o;
@@ -295,8 +336,8 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& img, int w
 struct RawImage { std::vector<uint8_t> pixels; uint16_t width; uint16_t height; uint8_t channels; };
 inline RawImage decompressImage(const std::vector<uint8_t>& data, int threads = int(std::thread::hardware_concurrency())) {
     if (data.size() < 7 || data[0] != magic_rc) throw std::runtime_error("Invalid magic number");
-    int ch = data[1], W = data[2] | data[3] << 8, H = data[4] | data[5] << 8;
-    if ((ch != 1 && ch != 3 && ch != 4) || W == 0 || H == 0) throw std::runtime_error("Invalid header");
+    int ch = data[1] & 15, mode = data[1] >> 4, W = data[2] | data[3] << 8, H = data[4] | data[5] << 8;
+    if ((ch != 1 && ch != 3 && ch != 4) || mode >= NMODES || W == 0 || H == 0) throw std::runtime_error("Invalid header");
     Strips st = strips_for(W, data[6]); size_t hdr = 7 + 4 * size_t(st.n); if (data.size() < hdr) throw std::runtime_error("Truncated");
     std::vector<size_t> off(st.n + 1, hdr);
     for (int i = 0; i < st.n; ++i) { size_t p = 7 + 4 * size_t(i); off[i + 1] = off[i] + (data[p] | data[p + 1] << 8 | data[p + 2] << 16 | size_t(data[p + 3]) << 24); }
@@ -305,7 +346,7 @@ inline RawImage decompressImage(const std::vector<uint8_t>& data, int threads = 
     RawImage out{std::vector<uint8_t>(size_t(W) * H * ch), uint16_t(W), uint16_t(H), uint8_t(ch)};
     parallel_for(st.n, threads, [&](int i) {
         const uint8_t* b = buf.data() + off[i]; int x0 = st.x(i), w = st.w(i);
-        if (ch == 1) dec_strip<1>(b, out.pixels.data(), W, x0, w, H); else if (ch == 3) dec_strip<3>(b, out.pixels.data(), W, x0, w, H); else dec_strip<4>(b, out.pixels.data(), W, x0, w, H);
+        if (ch == 1) dec_strip_m<1, 0>(b, out.pixels.data(), W, x0, w, H, mode); else if (ch == 3) dec_strip_m<3, 0>(b, out.pixels.data(), W, x0, w, H, mode); else dec_strip_m<4, 0>(b, out.pixels.data(), W, x0, w, H, mode);
     });
     return out;
 }
