@@ -14,6 +14,7 @@ Prints the best d edges per plane type, the gains and the groups of the best; wr
 --e3: no d sweep; d edges fixed (--dy / --duv, default = the sector edges); fourth axis = 3 unsigned levels of
 v = |E1| + |E2| (residuals of the left and top neighbours): v < t1, t1 <= v < t2, v >= t2, the pair t1/t2 swept;
 cells 49 x 7 x 3 = 1029 merged on train, measured on test; reports 2-D, 3-D (+d) and 4-D.
+--zz (with --e3): v = zigzag(E1) + zigzag(E2) as the decoder holds them (no abs; ~ 2 (|E1| + |E2|), thresholds doubled).
 Needs numpy, Pillow.
 """
 import argparse, glob, os, sys
@@ -47,7 +48,7 @@ def main():
     ap = argparse.ArgumentParser(); ap.add_argument('folder'); ap.add_argument('-n', type=int, default=100000)
     ap.add_argument('--seed', type=int, default=1); ap.add_argument('--max', type=int, default=0)
     ap.add_argument('--y', default='1,3,10'); ap.add_argument('--uv', default='1,3,7'); ap.add_argument('--to', default='16,11,8')
-    ap.add_argument('--e3', action='store_true'); ap.add_argument('--dy', default=''); ap.add_argument('--duv', default='')
+    ap.add_argument('--e3', action='store_true'); ap.add_argument('--zz', action='store_true'); ap.add_argument('--dy', default=''); ap.add_argument('--duv', default='')
     ap.add_argument('-o', default='q7d'); Q.add_args(ap); A = ap.parse_args()
     if A.e3: return main4(A)
     sizes = sorted({int(x) for x in A.to.split(',')}, reverse=True); EG = {0: [int(x) for x in A.y.split(',')], 1: [int(x) for x in A.uv.split(',')]}
@@ -98,7 +99,7 @@ def main():
 def main4(A):
     """4-D: sectors x q7(d-b) x 3 unsigned error levels of v = |E1| + |E2| (v < t1, t1 <= v < t2, v >= t2), t1/t2 swept"""
     sizes = sorted({int(x) for x in A.to.split(',')}, reverse=True); EG = {0: [int(x) for x in A.y.split(',')], 1: [int(x) for x in A.uv.split(',')]}
-    ED = {0: [int(x) for x in (A.dy or A.y).split(',')], 1: [int(x) for x in (A.duv or A.uv).split(',')]}; VC = 64
+    ED = {0: [int(x) for x in (A.dy or A.y).split(',')], 1: [int(x) for x in (A.duv or A.uv).split(',')]}; VC = 128 if A.zz else 64
     files = sorted(f for f in glob.glob(os.path.join(A.folder, '*')) if f.lower().endswith(('.png', '.ppm', '.pnm')))
     if A.max: files = files[:A.max]
     if len(files) < 2: sys.exit('need at least 2 images (train/test split)')
@@ -108,13 +109,14 @@ def main4(A):
         for (t, ga, gb, e, ea, eb), (_, _, _, _, gd) in zip(Q.load(f, A.n, A.seed, A.cache, not A.no_cache, e12=True), Q.load(f, A.n, A.seed, A.cache, not A.no_cache, dd=True)):
             ga, gb, gd = ga.astype(np.int32), gb.astype(np.int32), gd.astype(np.int32); ae = np.minimum(np.abs(e.astype(np.int32)), M - 1)
             s = (3 - qe(ga, EG[t])) * 7 + (qe(gb, EG[t]) + 3); dc = qe(gd, ED[t]) + 3
-            v = np.minimum(np.abs(ea.astype(np.int32)) + np.abs(eb.astype(np.int32)), VC)
+            ea, eb = ea.astype(np.int32), eb.astype(np.int32)
+            v = np.minimum((np.where(ea >= 0, 2 * ea, -2 * ea - 1) + np.where(eb >= 0, 2 * eb, -2 * eb - 1)) if A.zz else (np.abs(ea) + np.abs(eb)), VC)
             J[sp, t] += np.bincount(((s * 7 + dc) * (VC + 1) + v) * M + ae, minlength=343 * (VC + 1) * M).reshape(343, VC + 1, M)
         if (i + 1) % 25 == 0 or i + 1 == len(files): print(f'  {i + 1}/{len(files)}', flush=True)
     txt = open(A.o + '.txt', 'w', encoding='utf-8'); csv = open(A.o + '.csv', 'w', encoding='utf-8'); csv.write('plane,t1,t2,' + ','.join(f'gain_{g}_pct' for g in sizes) + '\n')
     def say(x=''): print(x, flush=True); txt.write(x + '\n')
     say(f'{len(files)} files x {A.n} px (train = even, test = odd); sectors Y {A.y}, U/V {A.uv}; d edges Y {ED[0]}, U/V {ED[1]}; '
-        f'error axis: 3 levels of v = |E1|+|E2| (no sign); |e| bits per test sample')
+        f'error axis: 3 levels of v = ' + ('zz(E1)+zz(E2) (zigzag)' if A.zz else '|E1|+|E2|') + ' (no sign); |e| bits per test sample')
     def ev(tr, te, sib):
         tr = tr.astype(np.float64); te = te.astype(np.float64)
         idx = np.where(tr.sum(1) > 0)[0]; r = agglo(tr[idx], sizes); out = {}
@@ -127,6 +129,7 @@ def main4(A):
             h = np.zeros((g, M)); np.add.at(h, lab[lab >= 0], te[lab >= 0]); out[g] = Hrows(h).sum()
         return out, r
     T1 = (1, 2, 3, 4, 6, 8, 12); T2 = (2, 3, 4, 6, 8, 12, 16, 24, 32, 48)
+    if A.zz: T1 = (1, 2, 3, 4, 5, 6, 8, 12, 16, 24); T2 = (2, 3, 4, 6, 8, 10, 12, 16, 24, 32, 48, 64, 96)
     for t, nm in ((0, 'Y'), (1, 'U/V')):
         tr4, te4 = J[0, t], J[1, t]; N = float(te4.sum())
         tr3 = tr4.sum(1); te3 = te4.sum(1); tr2 = tr3.reshape(49, 7, M).sum(1); te2 = te3.reshape(49, 7, M).sum(1)
