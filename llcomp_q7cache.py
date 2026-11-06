@@ -3,8 +3,9 @@
 Per image: N random pixels (rng seeded by seed + file name, so a file always gives the same pixels whatever else is in
 the folder), per plane Y, V, U (RCT V = R-G, U = B-G, Y = G + ((U+V) >> 2)): a = left, b = top, c = top-left
 (x = 0: a = c = b; y = 0: b = c = 0), raw c-a, c-b (int16), the MED residual e wrapped (Y mod 256, U/V mod 512) and the residuals of the left and top
-neighbours (E1 = e at x-1, E2 = e at y-1; 0 outside the image), and d-b (d = top-right; right edge: d = b, y = 0: 0).
-Caches written before E1/E2 or d-b existed are rebuilt once.
+neighbours (E1 = e at x-1, E2 = e at y-1; 0 outside the image), d-b (d = top-right; right edge: d = b, y = 0: 0), and
+the residuals of the top-left / top-right neighbours (E3 = e at (y-1, x-1), E4 = e at (y-1, x+1); 0 outside).
+Caches written before any of these existed are rebuilt once.
 Cache: one .npz per image in --cache (default ~/.cache/clic-q7, on Windows C:\\Users\\<you>\\.cache\\clic-q7), named
 <file>_<N>_<seed>.npz, reused while the image size and mtime match. --no-cache reads the images every time.
 """
@@ -37,14 +38,17 @@ def sample_raw(path, n, seed):
         e = E[ys, xs]
         ea = np.where(xs > 0, E[ys, np.maximum(xs - 1, 0)], 0)          # residual of the left neighbour (0 at x = 0)
         eb = np.where(ys > 0, E[np.maximum(ys - 1, 0), xs], 0)          # residual of the top neighbour (0 at y = 0)
+        etl = np.where((ys > 0) & (xs > 0), E[np.maximum(ys - 1, 0), np.maximum(xs - 1, 0)], 0)
+        etr = np.where((ys > 0) & (xs < W - 1), E[np.maximum(ys - 1, 0), np.minimum(xs + 1, W - 1)], 0)
         out.append((int(n9), GA[ys, xs].astype(np.int16), GB[ys, xs].astype(np.int16), e.astype(np.int16),
-                    ea.astype(np.int16), eb.astype(np.int16), GD[ys, xs].astype(np.int16)))
+                    ea.astype(np.int16), eb.astype(np.int16), GD[ys, xs].astype(np.int16), etl.astype(np.int16), etr.astype(np.int16)))
     return out
 
-def load(path, n, seed, cache=DEFAULT_CACHE, use_cache=True, e12=False, dd=False):
+def load(path, n, seed, cache=DEFAULT_CACHE, use_cache=True, e12=False, dd=False, full=False):
     """[(t, c-a, c-b, e)] for Y, V, U (t = 0 for Y, 1 for U/V); e12=True: [(t, c-a, c-b, e, e_left, e_top)];
-    dd=True: [(t, c-a, c-b, e, d-b)]"""
+    dd=True: [(t, c-a, c-b, e, d-b)]; full=True: [(t, c-a, c-b, e, e_left, e_top, d-b, e_topleft, e_topright)]"""
     r = _load(path, n, seed, cache, use_cache)
+    if full: return r
     if dd: return [x[:4] + (x[6],) for x in r]
     return [x[:6] for x in r] if e12 else [x[:4] for x in r]
 
@@ -54,11 +58,12 @@ def _load(path, n, seed, cache, use_cache):
     if os.path.exists(cf):
         try:
             with np.load(cf) as z:                                   # closes the file: Windows can't replace an open one
-                if int(z['size']) == st.st_size and int(z['mtime']) == int(st.st_mtime) and 'gd0' in z.files:
-                    return [(int(z['t'][i]), z[f'ga{i}'], z[f'gb{i}'], z[f'e{i}'], z[f'ea{i}'], z[f'eb{i}'], z[f'gd{i}']) for i in range(3)]
+                if int(z['size']) == st.st_size and int(z['mtime']) == int(st.st_mtime) and 'etl0' in z.files:
+                    return [(int(z['t'][i]), z[f'ga{i}'], z[f'gb{i}'], z[f'e{i}'], z[f'ea{i}'], z[f'eb{i}'], z[f'gd{i}'], z[f'etl{i}'], z[f'etr{i}']) for i in range(3)]
         except Exception: pass
     out = sample_raw(path, n, seed); os.makedirs(cache, exist_ok=True)
     d = {'size': st.st_size, 'mtime': int(st.st_mtime), 't': np.array([o[0] for o in out])}
-    for i, (_, ga, gb, e, ea, eb, gd) in enumerate(out): d[f'ga{i}'] = ga; d[f'gb{i}'] = gb; d[f'e{i}'] = e; d[f'ea{i}'] = ea; d[f'eb{i}'] = eb; d[f'gd{i}'] = gd
+    for i, (_, ga, gb, e, ea, eb, gd, etl, etr) in enumerate(out):
+        d[f'ga{i}'] = ga; d[f'gb{i}'] = gb; d[f'e{i}'] = e; d[f'ea{i}'] = ea; d[f'eb{i}'] = eb; d[f'gd{i}'] = gd; d[f'etl{i}'] = etl; d[f'etr{i}'] = etr
     tmp = cf + '.tmp.npz'; np.savez_compressed(tmp, **d); os.replace(tmp, cf)
     return out
