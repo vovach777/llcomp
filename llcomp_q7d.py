@@ -15,6 +15,8 @@ Prints the best d edges per plane type, the gains and the groups of the best; wr
 v = |E1| + |E2| (residuals of the left and top neighbours): v < t1, t1 <= v < t2, v >= t2, the pair t1/t2 swept;
 cells 49 x 7 x 3 = 1029 merged on train, measured on test; reports 2-D, 3-D (+d) and 4-D.
 --zz (with --e3): v = zigzag(E1) + zigzag(E2) as the decoder holds them (no abs; ~ 2 (|E1| + |E2|), thresholds doubled).
+--e3 also writes <o>_groups.csv: for the best thresholds the 1029 cells merged on all files, every group count of --to
+(groups renumbered by mean |e|, 0 = quietest): plane, t1, t2, groups, sector 1..49, dcell 0..6, level 0..2, group, samples.
 Needs numpy, Pillow.
 """
 import argparse, glob, os, sys
@@ -114,6 +116,7 @@ def main4(A):
             J[sp, t] += np.bincount(((s * 7 + dc) * (VC + 1) + v) * M + ae, minlength=343 * (VC + 1) * M).reshape(343, VC + 1, M)
         if (i + 1) % 25 == 0 or i + 1 == len(files): print(f'  {i + 1}/{len(files)}', flush=True)
     txt = open(A.o + '.txt', 'w', encoding='utf-8'); csv = open(A.o + '.csv', 'w', encoding='utf-8'); csv.write('plane,t1,t2,' + ','.join(f'gain_{g}_pct' for g in sizes) + '\n')
+    gcsv = open(A.o + '_groups.csv', 'w', encoding='utf-8'); gcsv.write('plane,t1,t2,groups,sector,dcell,level,group,samples\n')
     def say(x=''): print(x, flush=True); txt.write(x + '\n')
     say(f'{len(files)} files x {A.n} px (train = even, test = odd); sectors Y {A.y}, U/V {A.uv}; d edges Y {ED[0]}, U/V {ED[1]}; '
         f'error axis: 3 levels of v = ' + ('zz(E1)+zz(E2) (zigzag)' if A.zz else '|E1|+|E2|') + ' (no sign); |e| bits per test sample')
@@ -150,7 +153,23 @@ def main4(A):
         say(f'   best error thresholds (4-D = sectors x d x 3 error levels), gain vs 2-D at the same group count:')
         for t1, t2, b4 in rows[:8]:
             say(f'     v < {t1:2d} | < {t2:2d} | rest:  ' + '  '.join(f'{g}: {b4[g] / N:.4f} ({100 * (b4[g] / b2[g] - 1):+.2f}%)' for g in sizes))
-    say(f'\nwrote {A.o}.txt, {A.o}.csv')
+        t1, t2 = rows[0][0], rows[0][1]                               # final groups of the best: merged on ALL files
+        lv = np.minimum((np.arange(VC + 1) >= t1).astype(int) + (np.arange(VC + 1) >= t2), 2); al = np.zeros((343, 3, M))
+        for l in range(3): al[:, l] = (tr4 + te4)[:, lv == l].sum(1)
+        al = al.reshape(-1, M); idx = np.where(al.sum(1) > 0)[0]; r = agglo(al[idx], sizes)
+        for g in sizes:
+            lab = np.zeros(1029, np.int64); gl = []
+            for k, gr in enumerate(r[g][1]): lab[idx[gr]] = k
+            for k in range(g):                                         # renumber groups by mean |e| (0 = quietest)
+                c = al[lab == k].sum(0); gl.append(((c * np.arange(M)).sum() / max(c.sum(), 1), k))
+            order = {k: j for j, (_, k) in enumerate(sorted(gl))}; lab = np.array([order[k] for k in lab])
+            for c in range(1029): gcsv.write(f'{nm},{t1},{t2},{g},{c // 21 + 1},{(c // 3) % 7},{c % 3},{lab[c]},{int(al[c].sum())}\n')
+            if g == g0:
+                say(f'   the {g} groups for v < {t1} | < {t2} (merged on all files; sector.dcell.level, dcell 0..6 = q(d-b) -3..+3):')
+                for j, (me, k) in enumerate(sorted(gl)):
+                    cs = np.where(lab == j)[0]; sh = 100 * al[cs].sum() / al.sum()
+                    say(f'     group {j}: mean|e| {me:6.2f}  share {sh:5.2f}%  {len(cs)} cells')
+    say(f'\nwrote {A.o}.txt, {A.o}.csv, {A.o}_groups.csv')
 
 if __name__ == '__main__':
     main()
