@@ -21,9 +21,9 @@ int main(int argc, char** argv) {
         else pos.push_back(argv[i]);
     }
     if (pos.size() < 2) {
-        std::cerr << "Usage: " << argv[0] << " [-s N|c] [-t threads] [-x 0..3] <input_image> <output_file>\n"
+        std::cerr << "Usage: " << argv[0] << " [-s N|c] [-t threads] [-x 0..5] <input_image> <output_file>\n"
                      "  -s N  split into N equal strips (2, 4, ...; widths in 64-px blocks), c = HW threads, 0 = auto W/512\n"
-                     "  -x M  context: 0 tiny (default), 1 4d (PLT2 q7^3 x max3 level), 2 q7^3 x Enb, 3 the 8 PLT2 groups" << std::endl;
+                     "  -x M  context: 0 tiny (default), 1 4d (PLT2 q7^3 x max3 level), 2 q7^3 x Enb, 3 the 8 PLT2 groups, 4 FFV1-large cells -> 256 clusters, 5 = 4 x Enb" << std::endl;
         return 1;
     }
     Netpbm ppm(pos[0]);

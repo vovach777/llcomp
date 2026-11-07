@@ -46,6 +46,9 @@
 #endif
 #include "llcomp_rc_tables.h"
 #include "llcomp_fse_groups.h"   // kGroups: PLT2 4-D cell -> 8 groups (CLIC calibration)
+#include "llcomp_large_map.h"    // kLargeMap: FFV1-large-like cell -> 256 clusters (llcomp_large_cluster.py)
+#include <cstdio>
+#include <cstdlib>
 
 namespace llcomp_rc {
 using namespace llcomp_rc_tab;
@@ -71,8 +74,15 @@ constexpr int NL = 31, R0 = 4, RMAX = 8;
 //          max(z top-left, z top, z top-right) (zigzag of s*e; thresholds Y 8 32, U/V 3 8)         343 x 3
 //  2 4dE:  the same q7 gradients x llcomp's Enb (9)                                                343 x 9
 //  3 g8:   mode 1 unmirrored -> the 8 FSE groups of PLT2 (what the static coder uses)              8
-constexpr int NMODES = 4;
-constexpr int nctx_of(int mode) { return mode == 0 ? 63 * 9 : mode == 1 ? 343 * 3 : mode == 2 ? 343 * 9 : 8; }
+//  4 L256: FFV1-large-like cell q11(L-TL), q11(TL-T), q11(T-TR), q5(LL-L), q5(TT-T) (16638 mirrored cells)
+//          clustered to 256 contexts by a static map trained on a corpus (llcomp_large_cluster.py)       256
+//  5 L256E: the same 256 clusters x Enb (9)                                                          2304
+constexpr int NMODES = 6;
+constexpr int nctx_of(int mode) { return mode == 0 ? 63 * 9 : mode == 1 ? 343 * 3 : mode == 2 ? 343 * 9 : mode == 3 ? 8 : mode == 4 ? 256 : 256 * 9; }
+constexpr int NLCELL = 16638;
+inline FILE* dump_file() { static FILE* f = getenv("LLC_DUMP") ? fopen(getenv("LLC_DUMP"), "ab") : nullptr; return f; }   // (cell, letter, plane)
+static inline int ql11(int g) { int a = g < 0 ? -g : g, v = (a >= 1) + (a >= 2) + (a >= 5) + (a >= 12) + (a >= 23); return g < 0 ? -v : v; }
+static inline int ql5(int g) { int a = g < 0 ? -g : g, v = (a >= 1) + (a >= 4); return g < 0 ? -v : v; }
 struct Q7T { int8_t q[2][2048]; Q7T() { static const int E[2][3] = {{1, 3, 10}, {1, 3, 7}};
     for (int t = 0; t < 2; ++t) for (int g = -1024; g < 1024; ++g) { int a = g < 0 ? -g : g, v = (a >= E[t][0]) + (a >= E[t][1]) + (a >= E[t][2]); q[t][g + 1024] = int8_t(g < 0 ? -v : v); } } };
 inline const Q7T& Q7() { static const Q7T t; return t; }
@@ -187,10 +197,10 @@ template <int KIND, int MODE = 0>
 struct Chan {
     static constexpr int G = KIND, HALF = KIND ? 256 : 128, MASK = KIND ? 511 : 255, MID = KIND ? 0 : 128, T1 = 0, T2 = KIND ? 4 : 3;
     static constexpr int VT1 = KIND ? 3 : 8, VT2 = KIND ? 8 : 32;          // modes 1, 3: error levels on z (zigzag)
-    Model* M; std::vector<int16_t> ring; std::vector<uint16_t> e0, e1, z0, z1; int w;
-    int16_t* P; const int16_t* Q; uint16_t* Ec; const uint16_t* Ep; uint16_t* Zc; const uint16_t* Zp;
-    Chan(Model* m, int w_) : M(m), ring(2 * size_t(w_)), e0(w_), e1(w_), z0(size_t(w_) + 2, 0), z1(size_t(w_) + 2, 0), w(w_) {}
-    LLC_AI void row(int y) { P = ring.data() + (y & 1) * w; Q = y ? ring.data() + ((y - 1) & 1) * w : P; Ec = (y & 1) ? e1.data() : e0.data(); Ep = (y & 1) ? e0.data() : e1.data();
+    Model* M; std::vector<int16_t> ring; std::vector<uint16_t> e0, e1, z0, z1; int w; mutable int cell = 0;
+    int16_t* P; const int16_t* Q; const int16_t* Q2; uint16_t* Ec; const uint16_t* Ep; uint16_t* Zc; const uint16_t* Zp;
+    Chan(Model* m, int w_) : M(m), ring(3 * size_t(w_)), e0(w_), e1(w_), z0(size_t(w_) + 2, 0), z1(size_t(w_) + 2, 0), w(w_) {}
+    LLC_AI void row(int y) { P = ring.data() + (y % 3) * w; Q = y ? ring.data() + ((y - 1) % 3) * w : P; Q2 = y >= 2 ? ring.data() + ((y - 2) % 3) * w : Q; Ec = (y & 1) ? e1.data() : e0.data(); Ep = (y & 1) ? e0.data() : e1.data();
         Zc = ((y & 1) ? z1.data() : z0.data()) + 1; Zp = ((y & 1) ? z0.data() : z1.data()) + 1;   // halo 0 at -1 and w; row -1 = 0
         if (y == 0) std::fill(z1.begin(), z1.end(), uint16_t(0)); }
     static LLC_AI int q5(int g) { int a = g < 0 ? -g : g, s = (g > 0) - (g < 0); return s * ((a > T1) + (a > T2)); }
@@ -199,7 +209,13 @@ struct Chan {
         if (y == 0) { a = x ? P[x - 1] : MID; b = c = d = a; if (x) el = Ec[x - 1]; }
         else { b = Q[x]; if (x == 0) { a = c = b; } else { a = P[x - 1]; c = Q[x - 1]; el = Ec[x - 1]; } d = (x + 1 < w) ? Q[x + 1] : b; et = Ep[x]; }
         int mn = a < b ? a : b, mx = a < b ? b : a, pr = a + b - c; pred = pr < mn ? mn : (pr > mx ? mx : pr);
-        if (MODE == 0) {
+        if (MODE >= 4) {
+            const int ll = x >= 2 ? P[x - 2] : a, tt = y >= 2 ? Q2[x] : b;
+            int idx = ql11(a - c) + 11 * ql11(c - b) + 121 * ql11(b - d) + 1331 * ql5(ll - a) + 6655 * ql5(tt - b);
+            s = 1; if (idx < 0) { idx = -idx; s = -1; }                          // FFV1 mirror
+            cell = idx; const int k = llcomp_large::kLargeMap[G][idx];
+            cx = MODE == 4 ? k : k * 9 + (el > et ? el : et);
+        } else if (MODE == 0) {
             int idx = (q5(a - c) + 2) * 25 + (q5(c - b) + 2) * 5 + (q5(d - b) + 2);
             s = 1; if (idx > 62) { idx = 124 - idx; s = -1; }
             cx = idx * 9 + (el > et ? el : et);
@@ -223,6 +239,7 @@ struct Chan {
         Ec[x] = S().bw8[e < 0 ? -e : e];
         if (MODE == 1 || MODE == 3) { int se = s * e; Zc[x] = uint16_t(se >= 0 ? 2 * se : -2 * se - 1); }
         uint16_t q = ENC31[G][s * e + 256]; int l = q & 31;
+        if (MODE >= 4) if (FILE* f = dump_file()) { uint8_t r[4] = {uint8_t(cell), uint8_t(cell >> 8), uint8_t(l), uint8_t(G)}; fwrite(r, 1, 4, f); }
         Cdf& d = M->cdf[cx];
         E.put(B, d.c[l], d.c[l + 1] - d.c[l]);
         cdf_update(d, M->cnt[cx], l);
