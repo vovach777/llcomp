@@ -77,8 +77,12 @@ constexpr int NL = 31, R0 = 4, RMAX = 8;
 //  4 L256: FFV1-large-like cell q11(L-TL), q11(TL-T), q11(T-TR), q5(LL-L), q5(TT-T) (16638 mirrored cells)
 //          clustered to 256 contexts by a static map trained on a corpus (llcomp_large_cluster.py)       256
 //  5 L256E: the same 256 clusters x Enb (9)                                                          2304
-constexpr int NMODES = 6;
-constexpr int nctx_of(int mode) { return mode == 0 ? 63 * 9 : mode == 1 ? 343 * 3 : mode == 2 ? 343 * 9 : mode == 3 ? 8 : mode == 4 ? 256 : 256 * 9; }
+//  6 L256P: mode 4 with preset CDFs: every cluster starts from its corpus letter distribution (kLargePreset)
+//          and a slower start of the adaptation (count kPresetCnt)                                      256
+constexpr int NMODES = 7;
+constexpr int nctx_of(int mode) { return mode == 0 ? 63 * 9 : mode == 1 ? 343 * 3 : mode == 2 ? 343 * 9 : mode == 3 ? 8 : mode == 5 ? 256 * 9 : 256; }
+constexpr int kPresetCnt = 64;                                   // preset start: rate 6 (tuned held-out: 16..128 within 0.1%)
+inline int preset_cnt() { return kPresetCnt; }
 constexpr int NLCELL = 16638;
 inline FILE* dump_file() { static FILE* f = getenv("LLC_DUMP") ? fopen(getenv("LLC_DUMP"), "ab") : nullptr; return f; }   // (cell, letter, plane)
 static inline int ql11(int g) { int a = g < 0 ? -g : g, v = (a >= 1) + (a >= 2) + (a >= 5) + (a >= 12) + (a >= 23); return g < 0 ? -v : v; }
@@ -142,6 +146,7 @@ LLC_AI int cdf_find(const Cdf& d, uint32_t v) {
 struct Model {
     std::vector<Cdf> cdf; std::vector<uint16_t> cnt;
     explicit Model(int n) : cdf(n), cnt(n, 0) { for (auto& d : cdf) { for (int i = 0; i < 31; ++i) d.c[i] = uint16_t(i * 32768 / 31); d.c[31] = 32768; } }
+    void preset(int g) { for (size_t k = 0; k < cdf.size() && k < 256; ++k) { memcpy(cdf[k].c, llcomp_large::kLargePreset[g][k], 64); cnt[k] = uint16_t(preset_cnt()); } }
 };
 
 // ------------------------------------------------------------------ strip buffer, range coder (hybrid carry), bits
@@ -209,12 +214,12 @@ struct Chan {
         if (y == 0) { a = x ? P[x - 1] : MID; b = c = d = a; if (x) el = Ec[x - 1]; }
         else { b = Q[x]; if (x == 0) { a = c = b; } else { a = P[x - 1]; c = Q[x - 1]; el = Ec[x - 1]; } d = (x + 1 < w) ? Q[x + 1] : b; et = Ep[x]; }
         int mn = a < b ? a : b, mx = a < b ? b : a, pr = a + b - c; pred = pr < mn ? mn : (pr > mx ? mx : pr);
-        if (MODE >= 4) {
+        if (MODE >= 4) {                                                    // 4, 5, 6
             const int ll = x >= 2 ? P[x - 2] : a, tt = y >= 2 ? Q2[x] : b;
             int idx = ql11(a - c) + 11 * ql11(c - b) + 121 * ql11(b - d) + 1331 * ql5(ll - a) + 6655 * ql5(tt - b);
             s = 1; if (idx < 0) { idx = -idx; s = -1; }                          // FFV1 mirror
             cell = idx; const int k = llcomp_large::kLargeMap[G][idx];
-            cx = MODE == 4 ? k : k * 9 + (el > et ? el : et);
+            cx = MODE == 5 ? k * 9 + (el > et ? el : et) : k;
         } else if (MODE == 0) {
             int idx = (q5(a - c) + 2) * 25 + (q5(c - b) + 2) * 5 + (q5(d - b) + 2);
             s = 1; if (idx > 62) { idx = 124 - idx; s = -1; }
@@ -285,6 +290,7 @@ std::vector<uint8_t> enc_strip(const uint8_t* img, int W, int x0, int w, int H) 
     constexpr int NR = CH == 1 ? 1 : CH;                    // range coders
     RcEnc E[NR]; BitW Bw; for (auto& e : E) e.init(B);
     Model mY(nctx_of(MODE)), mC(nctx_of(MODE)), mA(nctx_of(MODE));
+    if (MODE == 6) { mY.preset(0); mC.preset(1); mA.preset(0); }
     Chan<0, MODE> cy(&mY, w); Chan<1, MODE> cu(&mC, w), cv(&mC, w); Chan<0, MODE> ca(&mA, w);
     for (int y = 0; y < H; ++y) {
         cy.row(y); if (CH >= 3) { cu.row(y); cv.row(y); } if (CH == 4) ca.row(y);
@@ -308,6 +314,7 @@ void dec_strip(const uint8_t* b, uint8_t* img, int W, int x0, int w, int H) {
     constexpr int NR = CH == 1 ? 1 : CH;
     RcDec D[NR]; BitR R; uint32_t n = 0; for (auto& d : D) d.init(b, n);
     Model mY(nctx_of(MODE)), mC(nctx_of(MODE)), mA(nctx_of(MODE));
+    if (MODE == 6) { mY.preset(0); mC.preset(1); mA.preset(0); }
     Chan<0, MODE> cy(&mY, w); Chan<1, MODE> cu(&mC, w), cv(&mC, w); Chan<0, MODE> ca(&mA, w);
     for (int y = 0; y < H; ++y) {
         cy.row(y); if (CH >= 3) { cu.row(y); cv.row(y); } if (CH == 4) ca.row(y);
