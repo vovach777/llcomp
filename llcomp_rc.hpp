@@ -19,6 +19,7 @@
 //  File: magic (0x77 + 16) | channels + (mode << 4) | u16 W | u16 H (as llcomp) | u8 strips (0 = W/512) | u32 len[N] | strips.
 #pragma once
 #include <algorithm>
+#include <memory>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
@@ -46,7 +47,10 @@
 #endif
 #include "llcomp_rc_tables.h"
 #include "llcomp_fse_groups.h"   // kGroups: PLT2 4-D cell -> 8 groups (CLIC calibration)
-#include "llcomp_large_map.h"    // kLargeMap: FFV1-large-like cell -> 256 clusters (llcomp_large_cluster.py)
+#include "llcomp_large_map.h"
+#include "llcomp_large_map2.h"
+#include "llcomp_large_preset2.h"
+#include "llcomp_sign_static.h"
 #include <cstdio>
 #include <cstdlib>
 
@@ -79,12 +83,20 @@ constexpr int NL = 31, R0 = 4, RMAX = 8;
 //  5 L256E: the same 256 clusters x Enb (9)                                                          2304
 //  6 L256P: mode 4 with preset CDFs: every cluster starts from its corpus letter distribution (kLargePreset)
 //          and a slower start of the adaptation (count kPresetCnt)                                      256
-constexpr int NMODES = 7;
+//  7 L256B: magnitude symbols 0..14 are exact |e|, 15 is an escape (7 raw bits luma, 8 chroma,
+//          value = 15 + bits). Sign is a frozen binary symbol on the same range coder, per (cluster, symbol).
+//  8 L256raw: mode 4 without the FFV1 sign flip. The cell is still folded so the old cluster map applies,
+//          but the letter is the raw residual: its sign stays in the +/− bins and is not multiplied by s.
+//  9 L256S: the 256 clusters trained on the signed cell (33275, no fold) and the raw residual letter.
+//          Neither the cell nor the residual is inverted.
+//  10 L256SP: mode 9 with preset CDFs (kLargePreset2), same slow start as mode 6.
+constexpr int NMODES = 11;
 constexpr int nctx_of(int mode) { return mode == 0 ? 63 * 9 : mode == 1 ? 343 * 3 : mode == 2 ? 343 * 9 : mode == 3 ? 8 : mode == 5 ? 256 * 9 : 256; }
 constexpr int kPresetCnt = 64;                                   // preset start: rate 6 (tuned held-out: 16..128 within 0.1%)
 inline int preset_cnt() { return kPresetCnt; }
 constexpr int NLCELL = 16638;
 inline FILE* dump_file() { static FILE* f = getenv("LLC_DUMP") ? fopen(getenv("LLC_DUMP"), "ab") : nullptr; return f; }   // (cell, letter, plane)
+inline bool dump_raw() { static const bool r = getenv("LLC_DUMP_RAW") != nullptr; return r; }   // unfolded cell, letter of raw e
 static inline int ql11(int g) { int a = g < 0 ? -g : g, v = (a >= 1) + (a >= 2) + (a >= 5) + (a >= 12) + (a >= 23); return g < 0 ? -v : v; }
 static inline int ql5(int g) { int a = g < 0 ? -g : g, v = (a >= 1) + (a >= 4); return g < 0 ? -v : v; }
 struct Q7T { int8_t q[2][2048]; Q7T() { static const int E[2][3] = {{1, 3, 10}, {1, 3, 7}};
@@ -147,7 +159,37 @@ struct Model {
     std::vector<Cdf> cdf; std::vector<uint16_t> cnt;
     explicit Model(int n) : cdf(n), cnt(n, 0) { for (auto& d : cdf) { for (int i = 0; i < 31; ++i) d.c[i] = uint16_t(i * 32768 / 31); d.c[31] = 32768; } }
     void preset(int g) { for (size_t k = 0; k < cdf.size() && k < 256; ++k) { memcpy(cdf[k].c, llcomp_large::kLargePreset[g][k], 64); cnt[k] = uint16_t(preset_cnt()); } }
+    void preset2(int g) { for (size_t k = 0; k < cdf.size() && k < 256; ++k) { memcpy(cdf[k].c, llcomp_large::kLargePreset2[g][k], 64); cnt[k] = uint16_t(preset_cnt()); } }
 };
+
+// mode 7: 16-ary magnitude CDF + binary sign, one state per cluster (and per bin for the sign)
+struct SignRC {
+    struct Mag { uint16_t c[17]; uint16_t cnt; };
+    struct Bin { uint16_t c1; uint16_t cnt; };
+    Mag mag[256];
+    Bin bin[256][16];
+    SignRC() {
+        for (int k = 0; k < 256; ++k) {
+            mag[k].cnt = 0;
+            for (int i = 0; i <= 16; ++i) mag[k].c[i] = uint16_t(i * 2048);
+            for (int b = 0; b < 16; ++b) { bin[k][b].c1 = 16384; bin[k][b].cnt = 0; }
+        }
+    }
+    void load(int g) {
+        for (int k = 0; k < 256; ++k)
+            for (int b = 0; b < 16; ++b) bin[k][b].c1 = llcomp_sign::kSignP[g][k][b];
+    }
+};
+LLC_AI void mag16_update(uint16_t* c, uint16_t& cnt, int l) {
+    int rate = rate_of(cnt);
+    for (int i = 1; i <= l; ++i) c[i] = uint16_t(c[i] - (uint16_t(c[i] - uint16_t(i * 2)) >> rate));
+    for (int i = l + 1; i < 16; ++i) c[i] = uint16_t(c[i] + (uint16_t(uint16_t(32768 - (16 - i) * 2) - c[i]) >> rate));
+}
+LLC_AI void bin_update(uint16_t& c1, uint16_t& cnt, int bit) {
+    int rate = rate_of(cnt);
+    if (bit) c1 = uint16_t(c1 - (uint16_t(c1 - 2) >> rate));
+    else c1 = uint16_t(c1 + (uint16_t(32766 - c1) >> rate));
+}
 
 // ------------------------------------------------------------------ strip buffer, range coder (hybrid carry), bits
 constexpr uint32_t TOP = 1u << 24;
@@ -203,6 +245,7 @@ struct Chan {
     static constexpr int G = KIND, HALF = KIND ? 256 : 128, MASK = KIND ? 511 : 255, MID = KIND ? 0 : 128, T1 = 0, T2 = KIND ? 4 : 3;
     static constexpr int VT1 = KIND ? 3 : 8, VT2 = KIND ? 8 : 32;          // modes 1, 3: error levels on z (zigzag)
     Model* M; std::vector<int16_t> ring; std::vector<uint16_t> e0, e1, z0, z1; int w; mutable int cell = 0;
+    SignRC* sig = nullptr;
     int16_t* P; const int16_t* Q; const int16_t* Q2; uint16_t* Ec; const uint16_t* Ep; uint16_t* Zc; const uint16_t* Zp;
     Chan(Model* m, int w_) : M(m), ring(3 * size_t(w_)), e0(w_), e1(w_), z0(size_t(w_) + 2, 0), z1(size_t(w_) + 2, 0), w(w_) {}
     LLC_AI void row(int y) { P = ring.data() + (y % 3) * w; Q = y ? ring.data() + ((y - 1) % 3) * w : P; Q2 = y >= 2 ? ring.data() + ((y - 2) % 3) * w : Q; Ec = (y & 1) ? e1.data() : e0.data(); Ep = (y & 1) ? e0.data() : e1.data();
@@ -217,9 +260,13 @@ struct Chan {
         if (MODE >= 4) {                                                    // 4, 5, 6
             const int ll = x >= 2 ? P[x - 2] : a, tt = y >= 2 ? Q2[x] : b;
             int idx = ql11(a - c) + 11 * ql11(c - b) + 121 * ql11(b - d) + 1331 * ql5(ll - a) + 6655 * ql5(tt - b);
-            s = 1; if (idx < 0) { idx = -idx; s = -1; }                          // FFV1 mirror
+            if (MODE == 9 || MODE == 10) {                                   // signed cell, raw residual, map trained that way
+                s = 1; cell = idx + 16637; cx = llcomp_large::kLargeMap2[G][cell];
+            } else {
+            s = 1; if (idx < 0) { idx = -idx; if (MODE != 8) s = -1; }       // mode 8: fold the cell, do not flip the residual
             cell = idx; const int k = llcomp_large::kLargeMap[G][idx];
             cx = MODE == 5 ? k * 9 + (el > et ? el : et) : k;
+            }
         } else if (MODE == 0) {
             int idx = (q5(a - c) + 2) * 25 + (q5(c - b) + 2) * 5 + (q5(d - b) + 2);
             s = 1; if (idx > 62) { idx = 124 - idx; s = -1; }
@@ -244,7 +291,32 @@ struct Chan {
         Ec[x] = S().bw8[e < 0 ? -e : e];
         if (MODE == 1 || MODE == 3) { int se = s * e; Zc[x] = uint16_t(se >= 0 ? 2 * se : -2 * se - 1); }
         uint16_t q = ENC31[G][s * e + 256]; int l = q & 31;
-        if (MODE >= 4) if (FILE* f = dump_file()) { uint8_t r[4] = {uint8_t(cell), uint8_t(cell >> 8), uint8_t(l), uint8_t(G)}; fwrite(r, 1, 4, f); }
+        if (MODE == 7) {
+            int mag = e < 0 ? -e : e;
+            int ml = mag < 15 ? mag : 15;
+            int neg = (s < 0) ^ (e < 0);
+            auto& md = sig->mag[cx];
+            E.put(B, md.c[ml], md.c[ml + 1] - md.c[ml]);
+            mag16_update(md.c, md.cnt, ml);
+            if (ml) {
+                auto& bd = sig->bin[cx][ml];
+                if (neg) E.put(B, bd.c1, 32768 - bd.c1); else E.put(B, 0, bd.c1);
+            }
+            if (ml == 15) Bw.put(B, uint32_t(mag - 15), G ? 8 : 7);
+            return;
+        }
+        if (MODE >= 4) if (FILE* f = dump_file()) {
+            int cell_out = cell, l_out = l;
+            if (dump_raw()) {                              // исходный знак: ячейка −16637..16637, буква сырого e
+                int signed_idx = s < 0 ? -cell : cell;
+                cell_out = signed_idx + 16637;
+                l_out = ENC31[G][e + 256] & 31;
+            }
+            uint8_t r[6] = {uint8_t(cell_out), uint8_t(cell_out >> 8), uint8_t(l_out), uint8_t(G), 0, 0};
+            int mag = e < 0 ? -e : e;
+            r[4] = uint8_t(mag); r[5] = uint8_t(mag >> 8);
+            fwrite(r, 1, 6, f);
+        }
         Cdf& d = M->cdf[cx];
         E.put(B, d.c[l], d.c[l + 1] - d.c[l]);
         cdf_update(d, M->cnt[cx], l);
@@ -252,16 +324,36 @@ struct Chan {
     }
     LLC_AI void dec(const uint8_t* b, uint32_t& nx, RcDec& D, BitR& R, int x, int y) {
         int pred, cx, s; ctx(x, y, pred, cx, s);
+        int l, a, sgn;
+        if (MODE == 7) {
+            auto& md = sig->mag[cx];
+            uint32_t r = D.range >> 15, v = D.code / r; v = v < 32767 ? v : 32767;
+            int ml = 0; while (ml < 15 && md.c[ml + 1] <= v) ++ml;
+            D.step(md.c[ml], md.c[ml + 1] - md.c[ml], r, b, nx);
+            mag16_update(md.c, md.cnt, ml);
+            int neg = 0;
+            if (ml) {
+                auto& bd = sig->bin[cx][ml];
+                r = D.range >> 15; v = D.code / r; v = v < 32767 ? v : 32767;
+                neg = v >= bd.c1;
+                if (neg) D.step(bd.c1, 32768 - bd.c1, r, b, nx); else D.step(0, bd.c1, r, b, nx);
+            }
+            l = ml; a = ml;
+            if (ml == 15) a = 15 + int(R.get(b, nx, G ? 8 : 7));
+            sgn = neg ? -1 : (ml ? 1 : 0);
+        } else {
         Cdf& d = M->cdf[cx];
         uint32_t r = D.range >> 15, v = D.code / r; v = v < 32767 ? v : 32767;
-        int l = cdf_find(d, v);
+        l = cdf_find(d, v);
         D.step(d.c[l], d.c[l + 1] - d.c[l], r, b, nx);
         cdf_update(d, M->cnt[cx], l);
-        int a = LO31[G][l];
+        a = LO31[G][l];
         if (int nb = RAW31[G][l]) a += int(R.get(b, nx, nb));
+        sgn = SIGN31[G][l];
+        }
         Ec[x] = S().bw8[a];
-        if (MODE == 1 || MODE == 3) { int se = SIGN31[G][l] * a; Zc[x] = uint16_t(se >= 0 ? 2 * se : -2 * se - 1); }
-        int vv = pred + s * SIGN31[G][l] * a;
+        if (MODE == 1 || MODE == 3) { int se = sgn * a; Zc[x] = uint16_t(se >= 0 ? 2 * se : -2 * se - 1); }
+        int vv = pred + s * sgn * a;
         P[x] = int16_t(KIND ? (((vv + 256) & 511) - 256) : (vv & 255));
     }
 };
@@ -291,7 +383,10 @@ std::vector<uint8_t> enc_strip(const uint8_t* img, int W, int x0, int w, int H) 
     RcEnc E[NR]; BitW Bw; for (auto& e : E) e.init(B);
     Model mY(nctx_of(MODE)), mC(nctx_of(MODE)), mA(nctx_of(MODE));
     if (MODE == 6) { mY.preset(0); mC.preset(1); mA.preset(0); }
+    if (MODE == 10) { mY.preset2(0); mC.preset2(1); mA.preset2(0); }
     Chan<0, MODE> cy(&mY, w); Chan<1, MODE> cu(&mC, w), cv(&mC, w); Chan<0, MODE> ca(&mA, w);
+    std::unique_ptr<SignRC> sy, sc, sa;
+    if (MODE == 7) { sy = std::make_unique<SignRC>(); sc = std::make_unique<SignRC>(); sa = std::make_unique<SignRC>(); sy->load(0); sc->load(1); sa->load(0); cy.sig = sy.get(); cu.sig = cv.sig = sc.get(); ca.sig = sa.get(); }
     for (int y = 0; y < H; ++y) {
         cy.row(y); if (CH >= 3) { cu.row(y); cv.row(y); } if (CH == 4) ca.row(y);
         const uint8_t* p = img + (size_t(y) * W + x0) * CH;
@@ -315,7 +410,10 @@ void dec_strip(const uint8_t* b, uint8_t* img, int W, int x0, int w, int H) {
     RcDec D[NR]; BitR R; uint32_t n = 0; for (auto& d : D) d.init(b, n);
     Model mY(nctx_of(MODE)), mC(nctx_of(MODE)), mA(nctx_of(MODE));
     if (MODE == 6) { mY.preset(0); mC.preset(1); mA.preset(0); }
+    if (MODE == 10) { mY.preset2(0); mC.preset2(1); mA.preset2(0); }
     Chan<0, MODE> cy(&mY, w); Chan<1, MODE> cu(&mC, w), cv(&mC, w); Chan<0, MODE> ca(&mA, w);
+    std::unique_ptr<SignRC> sy, sc, sa;
+    if (MODE == 7) { sy = std::make_unique<SignRC>(); sc = std::make_unique<SignRC>(); sa = std::make_unique<SignRC>(); sy->load(0); sc->load(1); sa->load(0); cy.sig = sy.get(); cu.sig = cv.sig = sc.get(); ca.sig = sa.get(); }
     for (int y = 0; y < H; ++y) {
         cy.row(y); if (CH >= 3) { cu.row(y); cv.row(y); } if (CH == 4) ca.row(y);
         for (int x = 0; x < w; ++x) {
