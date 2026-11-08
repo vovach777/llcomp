@@ -66,12 +66,14 @@ Compressed files use the `.llc` extension and contain:
 | Offset | Size | Description                          |
 |--------|------|-------------------------------------|
 | 0      | 1    | Magic number + revision (0x7B)      |
-| 1      | 1    | Number of channels (1, 3, 4)        |
+| 1      | 1    | Number of channels (1..4)           |
 | 2      | 2    | Width (little-endian, max 65535)    |
 | 4      | 2    | Height (little-endian, max 65535)   |
 | 6      | ...  | Compressed data (arithmetic coded)  |
 
 > **Note:** The format depends on the model size — a file compressed with one model cannot be decompressed with another.
+
+> **Note:** The C++ implementation reads/writes Netpbm **P5 (grayscale)** and **P6 (RGB)** and produces `.llc` files. The JavaScript prototype uses its own `.llcomp` container; the two formats are **not** interchangeable.
 
 ## Installation & Build (C++)
 
@@ -177,4 +179,4 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE) for detai
 
 ## References
 
-<a id="1">[1]</a> FFV1 codec — https://ffmpeg.org/ffmpeg-codecs.html#libavcodec_002dhuffyuv
+<a id="1">[1]</a> FFV1 codec — https://ffmpeg.org/ffmpeg-codecs.html#ffv1

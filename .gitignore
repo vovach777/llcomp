@@ -7,3 +7,5 @@
 !README.md
 !LICENSE
 !netpbm.hpp
+!tests/
+!tests/*.py

@@ -508,17 +508,32 @@ struct RawImage {
 };
 
 inline RawImage decompressImage(const std::vector<uint8_t>& data) {
+    // Header: magic(1) | channels(1) | width(2, LE) | height(2, LE), then the range-coded payload.
+    // Every header byte must exist before it is dereferenced: a truncated file used to read
+    // past the buffer (ASAN: heap-buffer-overflow / null dereference in the old header parser).
+    constexpr size_t kHeaderSize = 6;
+    if (data.size() < kHeaderSize) {
+        throw std::runtime_error("Truncated .llc header");
+    }
+    if (data.size() == kHeaderSize) {
+        throw std::runtime_error("Truncated .llc payload");
+    }
     size_t pos = 0;
     const uint8_t magic = data[pos++];
-    //assert((magic & 0xFF) == 0x77 && "Invalid magic number");
     if ((magic & 0xFF) != magic_revision) {
         throw std::runtime_error("Invalid magic number");
     }
     const uint8_t channels = data[pos++];
+    if (channels < 1 || channels > 4) {
+        throw std::runtime_error("Invalid channel count (expected 1..4)");
+    }
     const uint16_t width = (data[pos] | (data[pos + 1] << 8)); pos += 2;
     const uint16_t height = (data[pos] | (data[pos + 1] << 8)); pos += 2;
-    const size_t stride = width * channels;
-    std::vector<uint8_t> pixels(width * height * channels);
+    if (width == 0 || height == 0) {
+        throw std::runtime_error("Invalid image dimensions");
+    }
+    const size_t stride = size_t(width) * channels;
+    std::vector<uint8_t> pixels(size_t(width) * height * channels);
     size_t rgb_pos = 0;
 
     RangeDecoder decomp([&]() -> uint8_t {
@@ -595,17 +610,27 @@ inline RawImage decompressImage(const std::vector<uint8_t>& data) {
                 line0[x + i] = predict + diff;
             }
 
-            int r = line0[x + 0];
-            int g = line0[x + 1];
-            int b = line0[x + 2];
-            g -= ((r + b) >> 2);
-            r += g;
-            b += g;
-            pixels[rgb_pos++] = static_cast<uint8_t>(r);
-            pixels[rgb_pos++] = static_cast<uint8_t>(g);
-            pixels[rgb_pos++] = static_cast<uint8_t>(b);
-            for (size_t i = 3; i < channels; ++i) {
-                pixels[rgb_pos++] = static_cast<uint8_t>(line0[x + i]);
+            // The forward RCT in compressImage is applied only when channels >= 3,
+            // so the inverse RCT must use exactly the same condition. For P5 (channels == 1)
+            // this used to read line0[x+1..2] out of bounds and write 3 bytes per pixel
+            // into a 1-byte-per-pixel buffer (heap corruption).
+            if (channels >= 3) {
+                int r = line0[x + 0];
+                int g = line0[x + 1];
+                int b = line0[x + 2];
+                g -= ((r + b) >> 2);
+                r += g;
+                b += g;
+                pixels[rgb_pos++] = static_cast<uint8_t>(r);
+                pixels[rgb_pos++] = static_cast<uint8_t>(g);
+                pixels[rgb_pos++] = static_cast<uint8_t>(b);
+                for (size_t i = 3; i < channels; ++i) {
+                    pixels[rgb_pos++] = static_cast<uint8_t>(line0[x + i]);
+                }
+            } else {
+                for (size_t i = 0; i < channels; ++i) {
+                    pixels[rgb_pos++] = static_cast<uint8_t>(line0[x + i]);
+                }
             }
         }
     }

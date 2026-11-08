@@ -14,3 +14,13 @@ add_executable(llcompc-s llcompc.cpp llcomp.hpp netpbm.hpp)
 target_compile_definitions(llcompc-s PRIVATE SELECT_MODEL=ModelSizeSmall)
 add_executable(llcompd-s llcompd.cpp llcomp.hpp netpbm.hpp)
 target_compile_definitions(llcompd-s PRIVATE SELECT_MODEL=ModelSizeSmall)
+
+include(CTest)
+if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME roundtrip
+                 COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/roundtrip.py
+                         --build ${CMAKE_BINARY_DIR})
+    endif()
+endif()

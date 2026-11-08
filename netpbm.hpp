@@ -76,10 +76,14 @@
             if (size == 0) {
                 return;
             }
+            // The stream is opened with exceptions(failbit | badbit | eofbit), so a short
+            // read throws ios_base::failure before gcount() can be inspected. Keep only
+            // badbit during the read and report truncation with a clear message instead.
+            in.exceptions(std::ios::badbit);
             in.read(reinterpret_cast<char*>(data), size);
-            // if (static_cast<size_t>( in.gcount() ) < size ) {
-            //     throw std::runtime_error("PPM data truncated");
-            // }
+            if (static_cast<size_t>(in.gcount()) < size) {
+                throw std::runtime_error("PPM data truncated");
+            }
         }
 
         void close() {

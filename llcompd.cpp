@@ -3,6 +3,7 @@
 #include <cassert>
 #include <fstream>
 #include <vector>
+#include <stdexcept>
 #include "llcomp.hpp"
 #include "netpbm.hpp"
 
@@ -24,7 +25,14 @@ int main(int argc, char** argv) {
         auto [pixels, width, height, channels] = llcomp::decompressImage(compressed);
 
         const char* outputFile = argv[2];
-        char ppm_type = (channels == 3) ? '6' : (channels == 1) ? '5' : '6';
+        char ppm_type;
+        if (channels == 1) {
+            ppm_type = '5';
+        } else if (channels == 3) {
+            ppm_type = '6';
+        } else {
+            throw std::invalid_argument("Unsupported channel count in .llc file (expected 1 or 3)");
+        }
         Netpbm ppm(outputFile, ppm_type, width, height, 255);
         ppm.write(pixels.data(), pixels.size());
         ppm.close();
