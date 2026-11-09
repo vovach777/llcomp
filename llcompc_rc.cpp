@@ -11,25 +11,17 @@
 
 
 int main(int argc, char** argv) {
-    // [-s 1|2|4|8] band size in Ivy Bridge L2 units (256 KiB of pixels, whole rows). [-t T] worker threads.
-    int mode = 0, band = 1, threads = int(std::thread::hardware_concurrency()); std::vector<const char*> pos;
+    // [-t T] threads. Default 1: the whole frame is one piece. T>1 cuts T row-bands, but not under 512 KiB.
+    int mode = 0, threads = 1; std::vector<const char*> pos;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
-        if (a == "-s" && i + 1 < argc) {
-            std::string v = argv[++i];
-            if (v != "1" && v != "2" && v != "4" && v != "8") {
-                std::cerr << "band mode must be 1, 2, 4 or 8\n";
-                return 1;
-            }
-            band = std::stoi(v);
-        }
-        else if (a == "-t" && i + 1 < argc) threads = std::max(1, std::stoi(argv[++i]));
+        if (a == "-t" && i + 1 < argc) threads = std::max(1, std::stoi(argv[++i]));
         else if (a == "-x" && i + 1 < argc) mode = std::stoi(argv[++i]);
         else pos.push_back(argv[i]);
     }
     if (pos.size() < 2) {
-        std::cerr << "Usage: " << argv[0] << " [-s 1|2|4|8] [-t threads] [-x 0..11] <input_image> <output_file>\n"
-                     "  -s K  one piece is K * 256 KiB of pixels, cut on a row (default 1). Not a column strip\n"
+        std::cerr << "Usage: " << argv[0] << " [-t threads] [-x 0..11] <input_image> <output_file>\n"
+                     "  -t T  T row-bands, one thread each (default 1, the whole frame). A band stays >= 512 KiB, else T is lowered\n"
                      "  -x M  context mode 0..11" << std::endl;
         return 1;
     }
@@ -51,7 +43,7 @@ int main(int argc, char** argv) {
         ppm.read(rgb.data(), rgb.size());
         ppm.close();
 
-        std::vector<uint8_t> compressed = llcomp_rc::compressImage(rgb, width, height, channels, threads, band, mode);
+        std::vector<uint8_t> compressed = llcomp_rc::compressImage(rgb, width, height, channels, threads, 0, mode);
         const char* outputFile = pos[1];
         std::ofstream outFile(outputFile, std::ios::binary);
         if (!outFile) {

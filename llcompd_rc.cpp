@@ -11,7 +11,7 @@
 
 
 int main(int argc, char** argv) {
-    int threads = int(std::thread::hardware_concurrency()); std::vector<const char*> pos;   // [-t T] worker threads
+    int threads = 1; std::vector<const char*> pos;   // [-t T] worker threads, default 1
     for (int i = 1; i < argc; ++i) { std::string a = argv[i]; if (a == "-t" && i + 1 < argc) threads = std::max(1, std::stoi(argv[++i])); else pos.push_back(argv[i]); }
     if (pos.size() < 2) {
         std::cerr << "Usage: " << argv[0] << " [-t threads] <input_file> <output_image>" << std::endl;
