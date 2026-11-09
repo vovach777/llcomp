@@ -7,6 +7,8 @@
 !README.md
 !LICENSE
 !netpbm.hpp
+!tests/
+!tests/*.py
 !avx2.h
 !palic.json
 !benchmark_2.py

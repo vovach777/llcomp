@@ -5,6 +5,7 @@
 #include <vector>
 #include <thread>
 #include <algorithm>
+#include <stdexcept>
 #include "llcomp_rc.hpp"
 #include "netpbm.hpp"
 
@@ -21,27 +22,40 @@ int main(int argc, char** argv) {
         else pos.push_back(argv[i]);
     }
     if (pos.size() < 2) {
-        std::cerr << "Usage: " << argv[0] << " [-s N|c] [-t threads] [-x 0..5] <input_image> <output_file>\n"
+        std::cerr << "Usage: " << argv[0] << " [-s N|c] [-t threads] [-x 0..11] <input_image> <output_file>\n"
                      "  -s N  split into N equal strips (2, 4, ...; widths in 64-px blocks), c = HW threads, 0 = auto W/512\n"
-                     "  -x M  context: 0 tiny (default), 1 4d (PLT2 q7^3 x max3 level), 2 q7^3 x Enb, 3 the 8 PLT2 groups, 4 FFV1-large cells -> 256 clusters, 5 = 4 x Enb" << std::endl;
+                     "  -x M  context mode 0..11" << std::endl;
         return 1;
     }
-    Netpbm ppm(pos[0]);
-    uint32_t width = ppm.width;
-    uint32_t height = ppm.height;
-    uint32_t channels = (ppm.type == '6') ? 3 : (ppm.type == '5') ? 1 : 3;
-    std::vector<uint8_t> rgb(width * height * channels);
-    ppm.read(rgb.data(), rgb.size());
-    ppm.close();
+    try {
+        Netpbm ppm(pos[0]);
+        if (ppm.type != '6' && ppm.type != '5') {
+            throw std::invalid_argument("Unsupported Netpbm type (only P6/P5 are supported)");
+        }
+        if (ppm.maxvalue != 255) {
+            throw std::invalid_argument("Unsupported maxvalue (only 8-bit, 255, is supported)");
+        }
+        if (ppm.width == 0 || ppm.height == 0 || ppm.width > 65535 || ppm.height > 65535) {
+            throw std::invalid_argument("Invalid image dimensions");
+        }
+        const uint32_t width = ppm.width;
+        const uint32_t height = ppm.height;
+        const uint32_t channels = (ppm.type == '6') ? 3 : 1;
+        std::vector<uint8_t> rgb(size_t(width) * height * channels);
+        ppm.read(rgb.data(), rgb.size());
+        ppm.close();
 
-    std::vector<uint8_t> compressed = llcomp_rc::compressImage(rgb, width, height, channels, threads, nstrips, mode);
-    const char* outputFile = pos[1];
-    std::ofstream outFile(outputFile, std::ios::binary);
-    if (!outFile) {
-        std::cerr << "Error opening output file: " << outputFile << std::endl;
+        std::vector<uint8_t> compressed = llcomp_rc::compressImage(rgb, width, height, channels, threads, nstrips, mode);
+        const char* outputFile = pos[1];
+        std::ofstream outFile(outputFile, std::ios::binary);
+        if (!outFile) {
+            throw std::runtime_error(std::string("Error opening output file: ") + outputFile);
+        }
+        outFile.write(reinterpret_cast<const char*>(compressed.data()), compressed.size());
+        outFile.close();
+        return 0;
+    } catch (const std::exception& e) {
+        std::cerr << "Error compressing image: " << e.what() << std::endl;
         return 1;
     }
-    outFile.write(reinterpret_cast<const char*>(compressed.data()), compressed.size());
-    outFile.close();
-    return 0;
 }
