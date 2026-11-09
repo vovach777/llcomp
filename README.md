@@ -46,7 +46,7 @@ python3 llcomp_dp_train.py /path/to/clic --ky 256 --kuv 256
 
 Каталог или список: PPM сами, png/jpg через ffmpeg. В памяти одна картинка, гистограммы постоянного размера, слияние не растёт с корпусом — 1 ГБ картинок проходит. Скрипт пишет `llcomp_dp_cuts.h`, `llcomp_dp_map.h`, `llcomp_dp_preset.h`. После этого пересобрать `llcompc_rc` / `llcompd_rc`. Команда `-x 11`.
 
-Заголовки в репозитории обучены на 24 Kodak и на них же померены. Это не CLIC.
+Заголовки в репозитории обучены на CLIC professional train 2020, 585 цветных PNG, все приведены к P6. Серых в наборе нет. Kodak этим прогоном не учился.
 
 Generated executables:
 
