@@ -10,13 +10,13 @@
 //      when all are 0xFF -> every emitted byte is final);  bypass: one plain bit stream (64-bit words).
 //  Models: Y own, U and V share one, alpha own; gray = one luma channel.
 //
-//  Strips: N = max(1, W/512) (or set), floor(W/64) blocks of 64 px dealt out evenly; strips are independent
-//  (own coders, models, borders) -> threads. One buffer per strip: the channels' range streams + the shared bypass
-//  stream interleaved by deterministic slot reservation (RC: 4 bytes at start, 1 per renorm shift; bit writer:
-//  8 bytes when the first bit of a new word is written). Nothing is moved or glued except strip concatenation.
+//  Strips: independent full-height columns (own coders, models, borders) so threads do not share a context.
+//  A strip is at least 288 px wide. Count is min(requested or thread count, W/288); the first strips are equal
+//  and the leftover pixels go to the last strip. Byte 0 in the header is the old rule (N = max(1, W/512), 64 px
+//  blocks, extra blocks on the first strips) and is only read, never written.
 //
 //  Context modes 0..3 (-x): see nctx_of below; 0 = tiny (default, old files).
-//  File: magic (0x77 + 16) | channels + (mode << 4) | u16 W | u16 H (as llcomp) | u8 strips (0 = W/512) | u32 len[N] | strips.
+//  File: magic (0x77 + 16) | channels + (mode << 4) | u16 W | u16 H (as llcomp) | u8 strip count (0 = legacy W/512) | u32 len[N] | strips.
 #pragma once
 #include <algorithm>
 #include <memory>
@@ -399,14 +399,29 @@ struct Chan {
 };
 
 // ------------------------------------------------------------------ strips
+// mode 0: legacy files (header byte 0). 64 px blocks, extra blocks on the first strips.
+// mode 1: first n-1 strips are q px, the last one is q+r (the long tail). q >= 288 when n>1.
 struct Strips {
-    int n, W, q, r;
-    int x(int i) const { return n == 1 ? 0 : 64 * (i * q + std::min(i, r)); }
-    int w(int i) const { return i + 1 < n ? 64 * (q + (i < r)) : W - x(i); }
+    int n, W, q, r, mode;
+    int x(int i) const {
+        if (n == 1) return 0;
+        if (mode == 0) return 64 * (i * q + std::min(i, r));
+        return i * q;
+    }
+    int w(int i) const {
+        if (i + 1 == n) return W - x(i);
+        if (mode == 0) return 64 * (q + (i < r));
+        return q;
+    }
 };
-inline Strips strips_for(int W, int req) {
-    int n = req ? std::min(req, std::max(1, W / 64)) : std::max(1, W / 512), B = W / 64;
-    return Strips{n, W, n > 1 ? B / n : 0, n > 1 ? B % n : 0};
+inline Strips strips_legacy(int W) {
+    int n = std::max(1, W / 512), B = W / 64;
+    return Strips{n, W, n > 1 ? B / n : 0, n > 1 ? B % n : 0, 0};
+}
+inline Strips strips_288(int W, int n) {
+    n = std::max(1, std::min(n, std::max(1, W / 288)));
+    int q = n > 1 ? W / n : W, r = n > 1 ? W % n : 0;
+    return Strips{n, W, q, r, 1};
 }
 template <class F> void parallel_for(int n, int threads, F f) {
     if (threads <= 1 || n <= 1) { for (int i = 0; i < n; ++i) f(i); return; }
@@ -485,13 +500,16 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& img, int w
     if (mode < 0 || mode >= NMODES) throw std::invalid_argument("bad context mode");
     if (channels != 1 && channels != 3 && channels != 4) throw std::invalid_argument("channels must be 1, 3 or 4");
     if (width <= 0 || height <= 0 || width > 65535 || height > 65535 || img.size() != size_t(width) * height * channels) throw std::invalid_argument("bad image size");
-    nstrips = std::max(0, std::min(nstrips, 255)); Strips st = strips_for(width, nstrips);
+    int workers = std::max(1, threads);
+    int cap = std::max(1, width / 288);
+    int n = nstrips > 0 ? std::min(nstrips, cap) : std::min(workers, cap);
+    Strips st = strips_288(width, n);
     std::vector<std::vector<uint8_t>> s(st.n);
     parallel_for(st.n, threads, [&](int i) {
         int x0 = st.x(i), w = st.w(i);
         s[i] = channels == 1 ? enc_strip_m<1, 0>(img.data(), width, x0, w, height, mode) : channels == 3 ? enc_strip_m<3, 0>(img.data(), width, x0, w, height, mode) : enc_strip_m<4, 0>(img.data(), width, x0, w, height, mode);
     });
-    std::vector<uint8_t> o = {magic_rc, uint8_t(channels | mode << 4), uint8_t(width), uint8_t(width >> 8), uint8_t(height), uint8_t(height >> 8), uint8_t(nstrips)};
+    std::vector<uint8_t> o = {magic_rc, uint8_t(channels | mode << 4), uint8_t(width), uint8_t(width >> 8), uint8_t(height), uint8_t(height >> 8), uint8_t(st.n)};
     for (auto& b : s) for (int k = 0; k < 4; ++k) o.push_back(uint8_t(b.size() >> (8 * k)));
     for (auto& b : s) o.insert(o.end(), b.begin(), b.end());
     return o;
@@ -502,7 +520,7 @@ inline RawImage decompressImage(const std::vector<uint8_t>& data, int threads = 
     if (data.size() < 7 || data[0] != magic_rc) throw std::runtime_error("Invalid magic number");
     int ch = data[1] & 15, mode = data[1] >> 4, W = data[2] | data[3] << 8, H = data[4] | data[5] << 8;
     if ((ch != 1 && ch != 3 && ch != 4) || mode >= NMODES || W == 0 || H == 0) throw std::runtime_error("Invalid header");
-    Strips st = strips_for(W, data[6]); size_t hdr = 7 + 4 * size_t(st.n); if (data.size() < hdr) throw std::runtime_error("Truncated");
+    Strips st = data[6] == 0 ? strips_legacy(W) : strips_288(W, data[6]); size_t hdr = 7 + 4 * size_t(st.n); if (data.size() < hdr) throw std::runtime_error("Truncated");
     std::vector<size_t> off(st.n + 1, hdr);
     for (int i = 0; i < st.n; ++i) { size_t p = 7 + 4 * size_t(i); off[i + 1] = off[i] + (data[p] | data[p + 1] << 8 | data[p + 2] << 16 | size_t(data[p + 3]) << 24); }
     if (off.back() != data.size()) throw std::runtime_error("Bad strip lengths");

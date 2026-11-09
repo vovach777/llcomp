@@ -23,7 +23,7 @@ int main(int argc, char** argv) {
     }
     if (pos.size() < 2) {
         std::cerr << "Usage: " << argv[0] << " [-s N|c] [-t threads] [-x 0..11] <input_image> <output_file>\n"
-                     "  -s N  split into N equal strips (2, 4, ...; widths in 64-px blocks), c = HW threads, 0 = auto W/512\n"
+                     "  -s N  strips (default: min(threads, width/288)); each strip is at least 288 px, leftover pixels on the last\n"
                      "  -x M  context mode 0..11" << std::endl;
         return 1;
     }
