@@ -10,13 +10,13 @@
 //      when all are 0xFF -> every emitted byte is final);  bypass: one plain bit stream (64-bit words).
 //  Models: Y own, U and V share one, alpha own; gray = one luma channel.
 //
-//  Strips: independent full-height columns (own coders, models, borders) so threads do not share a context.
-//  A strip is at least 288 px wide. Count is min(requested or thread count, W/288); the first strips are equal
-//  and the leftover pixels go to the last strip. Byte 0 in the header is the old rule (N = max(1, W/512), 64 px
-//  blocks, extra blocks on the first strips) and is only read, never written.
+//  Pieces: full-width bands of whole rows, not vertical strips. One band is k * 256 KiB of pixels
+//  (Ivy Bridge L2 is 256 KiB per core; k is 1, 2, 4 or 8). Each band has its own model and is a thread job.
+//  Header byte 0x80|k is this cut. Byte 0 is the old W/512 columns; 1..127 is the 288 px column cut. Those are only read.
 //
 //  Context modes 0..3 (-x): see nctx_of below; 0 = tiny (default, old files).
-//  File: magic (0x77 + 16) | channels + (mode << 4) | u16 W | u16 H (as llcomp) | u8 strip count (0 = legacy W/512) | u32 len[N] | strips.
+//  File: magic (0x77 + 16) | channels + (mode << 4) | u16 W | u16 H | u8 cut | u32 len[N] | pieces.
+//  cut: 0x81/0x82/0x84/0x88 = 1/2/4/8 times L2 in whole rows; 0 = legacy columns; 1..127 = 288 px columns.
 #pragma once
 #include <algorithm>
 #include <memory>
@@ -423,6 +423,22 @@ inline Strips strips_288(int W, int n) {
     int q = n > 1 ? W / n : W, r = n > 1 ? W % n : 0;
     return Strips{n, W, q, r, 1};
 }
+constexpr int kL2Ivy = 256 * 1024; // Ivy Bridge L2, per core
+struct Bands {
+    int n, rows, H;
+    int y(int i) const { return i * rows; }
+    int h(int i) const { int y0 = y(i); return y0 >= H ? 0 : std::min(rows, H - y0); }
+};
+inline int l2_mode(int k) {
+    if (k != 1 && k != 2 && k != 4 && k != 8) throw std::invalid_argument("band mode must be 1, 2, 4 or 8");
+    return k;
+}
+inline Bands bands_l2(int W, int H, int ch, int k) {
+    int row = std::max(1, W * ch);
+    int rows = std::max(1, (k * kL2Ivy) / row);
+    if (rows > H) rows = H;
+    return Bands{(H + rows - 1) / rows, rows, H};
+}
 template <class F> void parallel_for(int n, int threads, F f) {
     if (threads <= 1 || n <= 1) { for (int i = 0; i < n; ++i) f(i); return; }
     std::atomic<int> next{0}; std::vector<std::thread> th;
@@ -500,17 +516,16 @@ inline std::vector<uint8_t> compressImage(const std::vector<uint8_t>& img, int w
     if (mode < 0 || mode >= NMODES) throw std::invalid_argument("bad context mode");
     if (channels != 1 && channels != 3 && channels != 4) throw std::invalid_argument("channels must be 1, 3 or 4");
     if (width <= 0 || height <= 0 || width > 65535 || height > 65535 || img.size() != size_t(width) * height * channels) throw std::invalid_argument("bad image size");
-    int workers = std::max(1, threads);
-    int cap = std::max(1, width / 288);
-    int n = nstrips > 0 ? std::min(nstrips, cap) : std::min(workers, cap);
-    Strips st = strips_288(width, n);
-    std::vector<std::vector<uint8_t>> s(st.n);
-    parallel_for(st.n, threads, [&](int i) {
-        int x0 = st.x(i), w = st.w(i);
-        s[i] = channels == 1 ? enc_strip_m<1, 0>(img.data(), width, x0, w, height, mode) : channels == 3 ? enc_strip_m<3, 0>(img.data(), width, x0, w, height, mode) : enc_strip_m<4, 0>(img.data(), width, x0, w, height, mode);
+    int k = l2_mode(nstrips > 0 ? nstrips : 1);
+    Bands bd = bands_l2(width, height, channels, k);
+    std::vector<std::vector<uint8_t>> s(bd.n);
+    parallel_for(bd.n, threads, [&](int i) {
+        const uint8_t* p = img.data() + size_t(bd.y(i)) * width * channels;
+        int h = bd.h(i);
+        s[i] = channels == 1 ? enc_strip_m<1, 0>(p, width, 0, width, h, mode) : channels == 3 ? enc_strip_m<3, 0>(p, width, 0, width, h, mode) : enc_strip_m<4, 0>(p, width, 0, width, h, mode);
     });
-    std::vector<uint8_t> o = {magic_rc, uint8_t(channels | mode << 4), uint8_t(width), uint8_t(width >> 8), uint8_t(height), uint8_t(height >> 8), uint8_t(st.n)};
-    for (auto& b : s) for (int k = 0; k < 4; ++k) o.push_back(uint8_t(b.size() >> (8 * k)));
+    std::vector<uint8_t> o = {magic_rc, uint8_t(channels | mode << 4), uint8_t(width), uint8_t(width >> 8), uint8_t(height), uint8_t(height >> 8), uint8_t(0x80 | k)};
+    for (auto& b : s) for (int sh = 0; sh < 4; ++sh) o.push_back(uint8_t(b.size() >> (8 * sh)));
     for (auto& b : s) o.insert(o.end(), b.begin(), b.end());
     return o;
 }
@@ -520,15 +535,30 @@ inline RawImage decompressImage(const std::vector<uint8_t>& data, int threads = 
     if (data.size() < 7 || data[0] != magic_rc) throw std::runtime_error("Invalid magic number");
     int ch = data[1] & 15, mode = data[1] >> 4, W = data[2] | data[3] << 8, H = data[4] | data[5] << 8;
     if ((ch != 1 && ch != 3 && ch != 4) || mode >= NMODES || W == 0 || H == 0) throw std::runtime_error("Invalid header");
-    Strips st = data[6] == 0 ? strips_legacy(W) : strips_288(W, data[6]); size_t hdr = 7 + 4 * size_t(st.n); if (data.size() < hdr) throw std::runtime_error("Truncated");
-    std::vector<size_t> off(st.n + 1, hdr);
-    for (int i = 0; i < st.n; ++i) { size_t p = 7 + 4 * size_t(i); off[i + 1] = off[i] + (data[p] | data[p + 1] << 8 | data[p + 2] << 16 | size_t(data[p + 3]) << 24); }
+    int tag = data[6];
+    Bands bd{}; Strips st{}; int npart = 0; bool rows = false;
+    if (tag & 0x80) {
+        int k = tag & 0x7f;
+        if (k != 1 && k != 2 && k != 4 && k != 8) throw std::runtime_error("Invalid header");
+        bd = bands_l2(W, H, ch, k); npart = bd.n; rows = true;
+    } else if (tag == 0) { st = strips_legacy(W); npart = st.n; }
+    else if (tag < 128) { st = strips_288(W, tag); npart = st.n; }
+    else throw std::runtime_error("Invalid header");
+    size_t hdr = 7 + 4 * size_t(npart); if (data.size() < hdr) throw std::runtime_error("Truncated");
+    std::vector<size_t> off(npart + 1, hdr);
+    for (int i = 0; i < npart; ++i) { size_t p = 7 + 4 * size_t(i); off[i + 1] = off[i] + (data[p] | data[p + 1] << 8 | data[p + 2] << 16 | size_t(data[p + 3]) << 24); }
     if (off.back() != data.size()) throw std::runtime_error("Bad strip lengths");
     std::vector<uint8_t> buf(data); buf.resize(data.size() + 16, 0);     // zero tail: no bounds checks in the hot loop
     RawImage out{std::vector<uint8_t>(size_t(W) * H * ch), uint16_t(W), uint16_t(H), uint8_t(ch)};
-    parallel_for(st.n, threads, [&](int i) {
-        const uint8_t* b = buf.data() + off[i]; int x0 = st.x(i), w = st.w(i);
-        if (ch == 1) dec_strip_m<1, 0>(b, out.pixels.data(), W, x0, w, H, mode); else if (ch == 3) dec_strip_m<3, 0>(b, out.pixels.data(), W, x0, w, H, mode); else dec_strip_m<4, 0>(b, out.pixels.data(), W, x0, w, H, mode);
+    parallel_for(npart, threads, [&](int i) {
+        const uint8_t* b = buf.data() + off[i];
+        if (rows) {
+            uint8_t* p = out.pixels.data() + size_t(bd.y(i)) * W * ch; int h = bd.h(i);
+            if (ch == 1) dec_strip_m<1, 0>(b, p, W, 0, W, h, mode); else if (ch == 3) dec_strip_m<3, 0>(b, p, W, 0, W, h, mode); else dec_strip_m<4, 0>(b, p, W, 0, W, h, mode);
+        } else {
+            int x0 = st.x(i), w = st.w(i);
+            if (ch == 1) dec_strip_m<1, 0>(b, out.pixels.data(), W, x0, w, H, mode); else if (ch == 3) dec_strip_m<3, 0>(b, out.pixels.data(), W, x0, w, H, mode); else dec_strip_m<4, 0>(b, out.pixels.data(), W, x0, w, H, mode);
+        }
     });
     return out;
 }
