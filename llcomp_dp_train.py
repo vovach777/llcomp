@@ -19,9 +19,13 @@
 # --ky и --kuv не обязаны быть степенью двойки и не обязаны совпадать.
 # Больше 256 нельзя: номер корзины — байт.
 #
-# Заголовки, которые лежат в репозитории, обучены на 24 Kodak
-# (kodak_color_p6_full). На них же снят размер. Это не CLIC.
-# Пока не перегенерируешь на своём корпусе, -x 11 — это Kodak.
+# Заголовки в репозитории — CLIC professional train 2020, цвет плюс серые.
+# Серый — не зелёный с поправкой RCT. Это BT.709 по записанным кодам sRGB:
+#   Y = (13933*R + 46871*G + 4732*B + 32768) >> 16
+#   0.2126, 0.7152, 0.0722. Гамма не снимается: иначе файл будет тёмный.
+# P5 кормит только модель яркости. Хрома по серому не учится.
+#   python3 llcomp_dp_train.py /path/p6 --luma /path/gray
+#   python3 llcomp_dp_train.py /path/p6 /path/gray --ky 256 --kuv 256
 import argparse, glob, os, subprocess, sys
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -38,7 +42,7 @@ def files_of(args):
         if os.path.isdir(a):
             for dp, _, names in os.walk(a):
                 for n in sorted(names):
-                    if n.lower().endswith(('.ppm', '.pnm', '.png', '.jpg', '.jpeg')):
+                    if n.lower().endswith(('.ppm', '.pnm', '.pgm', '.png', '.jpg', '.jpeg')):
                         out.append(os.path.join(dp, n))
         else:
             out.extend(sorted(glob.glob(a)))
@@ -54,22 +58,66 @@ def load_rgb(path):
     raw = subprocess.check_output(['ffmpeg', '-v', 'error', '-i', path, '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'])
     return np.frombuffer(raw, np.uint8).reshape(h, w, 3)
 
-def samples(rgb):
-    ys = planes(rgb)
-    for kind, P in ((0, ys[0]), (1, ys[1]), (1, ys[2])):
-        gs, pred = med_grad(P, 128 if kind == 0 else 0)
-        let = letter_of(residual(P, pred, kind), 0 if kind == 0 else 1).ravel()
-        yield (0 if kind == 0 else 1), gs, let
+def read_pgm(path):
+    with open(path, 'rb') as f:
+        if f.readline().strip() != b'P5': raise SystemExit(path)
+        line = f.readline()
+        while line.startswith(b'#'): line = f.readline()
+        w, h = map(int, line.split())
+        if f.readline().strip() != b'255': raise SystemExit('not 8-bit ' + path)
+        return np.frombuffer(f.read(), np.uint8).reshape(h, w)
+
+def luma709(rgb):
+    r = rgb[:, :, 0].astype(np.int32); g = rgb[:, :, 1].astype(np.int32); b = rgb[:, :, 2].astype(np.int32)
+    return ((13933 * r + 46871 * g + 4732 * b + 32768) >> 16).astype(np.uint8)
+
+def write_luma(src, dst):
+    os.makedirs(dst, exist_ok=True)
+    files = files_of([src])
+    acc = n = 0
+    for i, f in enumerate(files, 1):
+        rgb = load_rgb(f)
+        if rgb is None: continue
+        y = luma709(rgb)
+        rct = planes(rgb)[0]
+        acc += int(np.abs(y.astype(np.int16) - rct).sum()); n += y.size
+        h, w = y.shape
+        name = os.path.splitext(os.path.basename(f))[0] + '.pgm'
+        with open(os.path.join(dst, name), 'wb') as o:
+            o.write(('P5\n%d %d\n255\n' % (w, h)).encode()); o.write(y.tobytes())
+        if i % 100 == 0: print('luma', i, '/', len(files), file=sys.stderr)
+    print('luma files %d  mean |Y709 - RCT| %.3f' % (i, acc / max(n, 1)), file=sys.stderr)
+
+def each_plane(path):
+    if path.lower().endswith('.pgm'):
+        yield 0, read_pgm(path).astype(np.int16)
+        return
+    rgb = load_rgb(path)
+    if rgb is None: return
+    y, u, v = planes(rgb)
+    yield 0, y
+    yield 1, u
+    yield 1, v
+
+def add_plane(pl, P, edges, levels, Haxis, Hcell):
+    gs, pred = med_grad(P, 128 if pl == 0 else 0)
+    let = letter_of(residual(P, pred, pl), pl).ravel()
+    if Haxis is not None:
+        for ax, g in enumerate(gs):
+            gg = np.clip(g.astype(np.int32) + 255, 0, 510)
+            np.add.at(Haxis[pl, ax], (gg.ravel(), let), 1)
+        return
+    bins = [apply_edges(gs[ax], edges[pl][ax]).ravel() for ax in range(5)]
+    key = bins[0].astype(np.int32); mul = levels[0]
+    for ax in range(1, 5):
+        key = key + bins[ax] * mul; mul *= levels[ax]
+    np.add.at(Hcell[pl], (key, let), 1)
 
 def fit_edges(files, levels):
     H = np.zeros((2, 5, 511, 31), np.int64)
     for i, f in enumerate(files, 1):
-        rgb = load_rgb(f)
-        if rgb is None: continue
-        for pl, gs, let in samples(rgb):
-            for ax, g in enumerate(gs):
-                gg = np.clip(g.astype(np.int32) + 255, 0, 510)
-                np.add.at(H[pl, ax], (gg.ravel(), let), 1)
+        for pl, P in each_plane(f):
+            add_plane(pl, P, None, None, H, None)
         if i % 20 == 0: print('edges', i, '/', len(files), file=sys.stderr)
     edges = []
     for pl in (0, 1):
@@ -85,14 +133,8 @@ def cell_hist(files, edges, levels):
     H = np.zeros((2, 33275, 31), np.int64)
     base = levels
     for i, f in enumerate(files, 1):
-        rgb = load_rgb(f)
-        if rgb is None: continue
-        for pl, gs, let in samples(rgb):
-            bins = [apply_edges(gs[ax], edges[pl][ax]).ravel() for ax in range(5)]
-            key = bins[0].astype(np.int32); mul = base[0]
-            for ax in range(1, 5):
-                key = key + bins[ax] * mul; mul *= base[ax]
-            np.add.at(H[pl], (key, let), 1)
+        for pl, P in each_plane(f):
+            add_plane(pl, P, edges, base, None, H)
         if i % 20 == 0: print('cells', i, '/', len(files), file=sys.stderr)
     return H
 
@@ -173,6 +215,7 @@ def main():
     ap.add_argument('--ky', type=int, default=256)
     ap.add_argument('--kuv', type=int, default=256)
     ap.add_argument('--levels', default='11,11,11,5,5')
+    ap.add_argument('--luma', default='', help='write P5 BT.709 luma of the colour images here and stop')
     ap.add_argument('--out', default='.')
     a = ap.parse_args()
     if not (1 <= a.ky <= 256 and 1 <= a.kuv <= 256):
@@ -180,6 +223,10 @@ def main():
     levels = [int(v) for v in a.levels.split(',')]
     if len(levels) != 5 or any(not 1 <= b <= 15 for b in levels):
         sys.exit('levels: five integers, each 1..15')
+    if a.luma:
+        if len(a.images) != 1: sys.exit('--luma takes one colour directory')
+        write_luma(a.images[0], a.luma)
+        return
     files = files_of(a.images)
     if not files: sys.exit('no images')
     print('%d images' % len(files), file=sys.stderr)

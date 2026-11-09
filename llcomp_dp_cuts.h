@@ -1,5 +1,5 @@
 #pragma once
-// llcomp_dp_train.py ky=256 kuv=256 levels=11,11,11,5,5  585 files
+// llcomp_dp_train.py ky=256 kuv=256 levels=11,11,11,5,5  1170 files
 static const int16_t DPY[5][10] = {
   {-19,-7,-3,-1,0,1,2,4,9,24},
   {-21,-8,-3,-1,0,1,2,4,8,19},
