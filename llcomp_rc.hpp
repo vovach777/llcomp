@@ -51,6 +51,9 @@
 #include "llcomp_large_map2.h"
 #include "llcomp_large_preset2.h"
 #include "llcomp_sign_static.h"
+#include "llcomp_dp_cuts.h"
+#include "llcomp_dp_map.h"
+#include "llcomp_dp_preset.h"
 #include <cstdio>
 #include <cstdlib>
 
@@ -90,10 +93,31 @@ constexpr int NL = 31, R0 = 4, RMAX = 8;
 //  9 L256S: the 256 clusters trained on the signed cell (33275, no fold) and the raw residual letter.
 //          Neither the cell nor the residual is inverted.
 //  10 L256SP: mode 9 with preset CDFs (kLargePreset2), same slow start as mode 6.
-constexpr int NMODES = 11;
+//  11 DP: thresholds fit per axis (llcomp_dp_train.py), sign kept, no mirror.
+//          Compiled-in map and preset; LLC_TAB overrides them. Basket id is a byte, so <= 256.
+constexpr int NMODES = 12;
 constexpr int nctx_of(int mode) { return mode == 0 ? 63 * 9 : mode == 1 ? 343 * 3 : mode == 2 ? 343 * 9 : mode == 3 ? 8 : mode == 5 ? 256 * 9 : 256; }
 constexpr int kPresetCnt = 64;                                   // preset start: rate 6 (tuned held-out: 16..128 within 0.1%)
 inline int preset_cnt() { return kPresetCnt; }
+struct DpTab {
+    int ky = 256, kuv = 256;
+    uint8_t map[2][33275] = {};
+    uint16_t pres[2][256][32] = {};
+    void load() {
+        memcpy(map, llcomp_dp::kDpMap, sizeof(map));
+        memcpy(pres, llcomp_dp::kDpPreset, sizeof(pres));
+        const char* p = getenv("LLC_TAB"); if (!p) return;
+        FILE* f = fopen(p, "rb"); if (!f) { perror(p); abort(); }
+        uint16_t ks[2];
+        if (fread(ks, 2, 2, f) != 2) abort();
+        ky = ks[0]; kuv = ks[1];
+        if (fread(map, 33275, 2, f) != 2) abort();
+        if (fread(pres, sizeof(uint16_t), 2 * 256 * 32, f) != 2u * 256 * 32) abort();
+        fclose(f);
+    }
+};
+inline DpTab& dptab() { static DpTab t; static int once = (t.load(), 1); (void)once; return t; }
+static inline int dpbin(int g, const int16_t* c, int n) { int b = 0; while (b < n && g >= c[b]) ++b; return b; }
 constexpr int NLCELL = 16638;
 inline FILE* dump_file() { static FILE* f = getenv("LLC_DUMP") ? fopen(getenv("LLC_DUMP"), "ab") : nullptr; return f; }   // (cell, letter, plane)
 inline bool dump_raw() { static const bool r = getenv("LLC_DUMP_RAW") != nullptr; return r; }   // unfolded cell, letter of raw e
@@ -259,6 +283,21 @@ struct Chan {
         int mn = a < b ? a : b, mx = a < b ? b : a, pr = a + b - c; pred = pr < mn ? mn : (pr > mx ? mx : pr);
         if (MODE >= 4) {                                                    // 4, 5, 6
             const int ll = x >= 2 ? P[x - 2] : a, tt = y >= 2 ? Q2[x] : b;
+            if (MODE == 11) {
+                s = 1;
+                int b0, b1, b2, b3, b4;
+                if (G) {
+                    b0 = dpbin(a - c, DPUV[0], DPNUV[0]); b1 = dpbin(c - b, DPUV[1], DPNUV[1]);
+                    b2 = dpbin(b - d, DPUV[2], DPNUV[2]); b3 = dpbin(ll - a, DPUV[3], DPNUV[3]);
+                    b4 = dpbin(tt - b, DPUV[4], DPNUV[4]);
+                } else {
+                    b0 = dpbin(a - c, DPY[0], DPNY[0]); b1 = dpbin(c - b, DPY[1], DPNY[1]);
+                    b2 = dpbin(b - d, DPY[2], DPNY[2]); b3 = dpbin(ll - a, DPY[3], DPNY[3]);
+                    b4 = dpbin(tt - b, DPY[4], DPNY[4]);
+                }
+                cell = b0 + 11 * b1 + 121 * b2 + 1331 * b3 + 6655 * b4;
+                cx = dptab().map[G][cell];
+            } else {
             int idx = ql11(a - c) + 11 * ql11(c - b) + 121 * ql11(b - d) + 1331 * ql5(ll - a) + 6655 * ql5(tt - b);
             if (MODE == 9 || MODE == 10) {                                   // signed cell, raw residual, map trained that way
                 s = 1; cell = idx + 16637; cx = llcomp_large::kLargeMap2[G][cell];
@@ -266,6 +305,7 @@ struct Chan {
             s = 1; if (idx < 0) { idx = -idx; if (MODE != 8) s = -1; }       // mode 8: fold the cell, do not flip the residual
             cell = idx; const int k = llcomp_large::kLargeMap[G][idx];
             cx = MODE == 5 ? k * 9 + (el > et ? el : et) : k;
+            }
             }
         } else if (MODE == 0) {
             int idx = (q5(a - c) + 2) * 25 + (q5(c - b) + 2) * 5 + (q5(d - b) + 2);
@@ -384,6 +424,7 @@ std::vector<uint8_t> enc_strip(const uint8_t* img, int W, int x0, int w, int H) 
     Model mY(nctx_of(MODE)), mC(nctx_of(MODE)), mA(nctx_of(MODE));
     if (MODE == 6) { mY.preset(0); mC.preset(1); mA.preset(0); }
     if (MODE == 10) { mY.preset2(0); mC.preset2(1); mA.preset2(0); }
+    if (MODE == 11) { auto& t = dptab(); auto loadp = [](Model& m, uint16_t p[][32]) { for (int k = 0; k < 256; ++k) { memcpy(m.cdf[k].c, p[k], 64); m.cnt[k] = uint16_t(preset_cnt()); } }; loadp(mY, t.pres[0]); loadp(mC, t.pres[1]); loadp(mA, t.pres[0]); }
     Chan<0, MODE> cy(&mY, w); Chan<1, MODE> cu(&mC, w), cv(&mC, w); Chan<0, MODE> ca(&mA, w);
     std::unique_ptr<SignRC> sy, sc, sa;
     if (MODE == 7) { sy = std::make_unique<SignRC>(); sc = std::make_unique<SignRC>(); sa = std::make_unique<SignRC>(); sy->load(0); sc->load(1); sa->load(0); cy.sig = sy.get(); cu.sig = cv.sig = sc.get(); ca.sig = sa.get(); }
@@ -411,6 +452,7 @@ void dec_strip(const uint8_t* b, uint8_t* img, int W, int x0, int w, int H) {
     Model mY(nctx_of(MODE)), mC(nctx_of(MODE)), mA(nctx_of(MODE));
     if (MODE == 6) { mY.preset(0); mC.preset(1); mA.preset(0); }
     if (MODE == 10) { mY.preset2(0); mC.preset2(1); mA.preset2(0); }
+    if (MODE == 11) { auto& t = dptab(); auto loadp = [](Model& m, uint16_t p[][32]) { for (int k = 0; k < 256; ++k) { memcpy(m.cdf[k].c, p[k], 64); m.cnt[k] = uint16_t(preset_cnt()); } }; loadp(mY, t.pres[0]); loadp(mC, t.pres[1]); loadp(mA, t.pres[0]); }
     Chan<0, MODE> cy(&mY, w); Chan<1, MODE> cu(&mC, w), cv(&mC, w); Chan<0, MODE> ca(&mA, w);
     std::unique_ptr<SignRC> sy, sc, sa;
     if (MODE == 7) { sy = std::make_unique<SignRC>(); sc = std::make_unique<SignRC>(); sa = std::make_unique<SignRC>(); sy->load(0); sc->load(1); sa->load(0); cy.sig = sy.get(); cu.sig = cv.sig = sc.get(); ca.sig = sa.get(); }

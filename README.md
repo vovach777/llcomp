@@ -36,6 +36,18 @@ llcomp/
 The CLI tools work with the **Netpbm** format (PPM P6 for RGB, PGM P5 for grayscale).
 Image preparation: `ffmpeg -i input.png -pix_fmt rgb24 output.ppm`
 
+### -x 11, обучение на своём корпусе
+
+Пороги пяти осей, карта корзин и пресет генерируются в заголовки. Знак не инвертируется. Номер корзины — байт, поэтому `--ky` и `--kuv` от 1 до 256, степень двойки не нужна.
+
+```
+python3 llcomp_dp_train.py /path/to/clic --ky 256 --kuv 256
+```
+
+Каталог или список: PPM сами, png/jpg через ffmpeg. В памяти одна картинка, гистограммы постоянного размера, слияние не растёт с корпусом — 1 ГБ картинок проходит. Скрипт пишет `llcomp_dp_cuts.h`, `llcomp_dp_map.h`, `llcomp_dp_preset.h`. После этого пересобрать `llcompc_rc` / `llcompd_rc`. Команда `-x 11`.
+
+Заголовки в репозитории обучены на 24 Kodak и на них же померены. Это не CLIC.
+
 Generated executables:
 
 | Executable        | Model       | Purpose          |
